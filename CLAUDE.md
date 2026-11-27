@@ -37,6 +37,17 @@ Read [README.md](README.md), [PLAN.md](PLAN.md) and [PHASE0.md](PHASE0.md).
 - GCC 2.95 did not know `bailing()` never returns, so code after its calls is
   real: only libc's own no-return functions are marked.
 - The Metal vertex struct must be packed (40 bytes) to match `gl::Vertex`.
+- visionOS turns controller presses into pinches on the gazed view unless a
+  `GCEventInteraction` claims them. With `receivesEventsInView` (or
+  `GCSupportsControllerUserInteraction`) the app got no input at all on
+  visionOS 27, so the interaction is exclusive. PS VR2 Sense controllers are
+  `GCController`s of category `SpatialController`, one per hand, read through
+  `physicalInputProfile` (no `extendedGamepad`). Their buttons work without
+  any permission; where they point needs `NSAccessoryTrackingUsageDescription`,
+  an ARKit `requestAuthorization(for: [.accessoryTracking])` (that is what
+  shows the prompt) and a running `SpatialTrackingSession` with `.accessory`,
+  then RealityKit anchors on the "aim" location (platform/visionos/aim.swift,
+  after Keisho's vision_stereo.swift).
 
 ## Next steps
 

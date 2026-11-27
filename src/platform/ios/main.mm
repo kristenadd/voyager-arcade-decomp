@@ -1,4 +1,12 @@
-// The iOS / iPadOS app. Free play is forced (there is no coin slot).
+// The iOS / iPadOS and visionOS app. Free play is forced (there is no coin slot).
+//
+// On Apple Vision Pro it runs in a floating window (16:10, resized
+// uniformly, the 4:3 picture between black bars). Look and pinch is a tap.
+// Controller presses go only to the Game Controller framework
+// (GCEventInteraction); a PlayStation VR2 Sense trigger fires at the
+// crosshair its thumbsticks move (platform/apple/controllers.hpp). In case
+// the system still sends a pad's press as a pinch, a touch within
+// kPinchWindow of a gamepad press is dropped.
 //
 // Touch: the START button (bottom right) starts a game. A tap on the
 // picture shoots where it lands; a tap anywhere outside it (the black bars)
@@ -11,12 +19,14 @@
 // with the device connected): the folder holding trek, stvsnd, stvserv and
 // stv/, either Documents itself or one folder inside it.
 #import <AVFAudio/AVFAudio.h>
+#import <GameController/GameController.h>
 #import <MetalKit/MetalKit.h>
 #import <UIKit/UIKit.h>
 
 #include <chrono>
 #include <memory>
 #include <string>
+#include <vector>
 #include <sys/stat.h>
 
 #include "app/session.hpp"
@@ -46,6 +56,20 @@ std::string find_content() {
     return {};
 }
 
+#if TARGET_OS_VISION
+// visionOS: touches wait this long for a gamepad press that would make them
+// the pad's own pinch, which the pad has already handled.
+constexpr double kTouchDelay = 0.05;
+constexpr double kPinchWindow = 0.15;
+const CGSize kWindowSize = {1440, 900};
+#endif
+
+struct PendingTouch {
+    double t;
+    float gx, gy;
+    bool inside;
+};
+
 }  // namespace
 
 @interface GameViewController : UIViewController <MTKViewDelegate>
@@ -62,19 +86,36 @@ std::string find_content() {
     UILabel* message;
     UIButton* start;
     bool pad_mode;  // the controller was used last: crosshair shown, START hidden
+    std::vector<PendingTouch> pending;  // visionOS: touches waiting out kTouchDelay
 }
 
+#if !TARGET_OS_VISION
 - (BOOL)prefersStatusBarHidden { return YES; }
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }
+#endif
 
 - (void)loadView {
-    MTKView* v = [[MTKView alloc] initWithFrame:UIScreen.mainScreen.bounds device:MTLCreateSystemDefaultDevice()];
+#if TARGET_OS_VISION
+    const CGRect frame = {CGPointZero, kWindowSize};
+#else
+    const CGRect frame = UIScreen.mainScreen.bounds;
+#endif
+    MTKView* v = [[MTKView alloc] initWithFrame:frame device:MTLCreateSystemDefaultDevice()];
     v.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
     v.preferredFramesPerSecond = 60;
     v.delegate = self;
     v.multipleTouchEnabled = YES;
     v.backgroundColor = UIColor.blackColor;
+#if TARGET_OS_VISION
+    // Without this, visionOS turns controller presses into pinches at the
+    // gaze point and the Game Controller framework reads nothing. Delivery
+    // must be exclusive: asking for the view as well (receivesEventsInView)
+    // left both empty on visionOS 27.
+    GCEventInteraction* gc = [GCEventInteraction new];
+    gc.handledEventTypes = GCUIEventTypeGamepad;
+    [v addInteraction:gc];
+#endif
     self.view = v;
 }
 
@@ -86,6 +127,11 @@ std::string find_content() {
     message.textColor = UIColor.whiteColor;
     message.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:message];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    if (host && self.view.window) pads.attach_window((__bridge void*)self.view.window);
 }
 
 - (void)viewDidLoad {
@@ -117,6 +163,15 @@ std::string find_content() {
     host = std::make_unique<platform::GameHost>(cfg);
     audio = std::make_unique<platform::AudioOut>(host->machine());
     audio->start();
+    // Where a Sense controller points (0..1 of the window, which the view fills) in game coordinates.
+    __weak GameViewController* weak = self;
+    pads.set_window_to_game([weak](float fx, float fy, float* gx, float* gy) {
+        GameViewController* me = weak;
+        if (!me) return false;
+        const CGSize size = me.view.bounds.size;
+        const CGFloat s = me.view.contentScaleFactor;
+        return platform::to_game(me->rect, float(fx * size.width * s), float(fy * size.height * s), gx, gy);
+    });
     last = std::chrono::steady_clock::now();
     host->start();
 
@@ -162,25 +217,56 @@ std::string find_content() {
 }
 
 - (void)startPressed {
+    platform::input_log("START button");
     if (!host) return;
     host->machine().input().set_button(host::Input::Start1, true);
     start_hold = 8;
 }
 
 - (void)touchesBegan:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event {
-    if (!host) return;
-    pad_mode = false;  // touch play: START back, crosshair hidden
-    if (event.allTouches.count >= 2) {  // two fingers: reload
-        host->machine().input().shot(0, -1, -1);
-        return;
-    }
-    const CGFloat s = self.view.contentScaleFactor;
     for (UITouch* t in touches) {
         const CGPoint p = [t locationInView:self.view];
-        float gx, gy;
-        const bool inside = platform::to_game(rect, float(p.x * s), float(p.y * s), &gx, &gy);
-        host->pointer_shot(0, gx, gy, inside);
+        platform::input_log("touch began at %.0f, %.0f (type %ld, %lu in event)", p.x, p.y, (long)t.type,
+                            (unsigned long)event.allTouches.count);
     }
+    if (!host) return;
+    const double now = platform::Controllers::now_seconds();
+    if (event.allTouches.count >= 2) {  // two fingers (two hands): reload
+        pending.push_back({now, 0, 0, false});
+    } else {
+        const CGFloat s = self.view.contentScaleFactor;
+        for (UITouch* t in touches) {
+            const CGPoint p = [t locationInView:self.view];
+            PendingTouch pt{now, 0, 0, false};
+            pt.inside = platform::to_game(rect, float(p.x * s), float(p.y * s), &pt.gx, &pt.gy);
+            pending.push_back(pt);
+        }
+    }
+#if !TARGET_OS_VISION
+    [self fireTouches:now];
+#endif
+}
+
+// Fires the touches that are due: on iOS at once, on visionOS after
+// kTouchDelay unless a gamepad press shows them to be its pinch.
+- (void)fireTouches:(double)now {
+    std::size_t kept = 0;
+    for (const PendingTouch& t : pending) {
+#if TARGET_OS_VISION
+        if (now - t.t < kTouchDelay) {
+            pending[kept++] = t;
+            continue;
+        }
+        if (pads.pad_press_near(t.t, kPinchWindow)) {
+            platform::input_log("touch dropped: a gamepad press came with it");
+            continue;
+        }
+#endif
+        pad_mode = false;  // touch play: START back, crosshair hidden
+        platform::input_log("touch shot at %.0f, %.0f (inside %d)", t.gx, t.gy, t.inside);
+        host->pointer_shot(0, t.gx, t.gy, t.inside);
+    }
+    pending.resize(kept);
 }
 
 - (void)mtkView:(MTKView*)view drawableSizeWillChange:(CGSize)size {}
@@ -193,6 +279,7 @@ std::string find_content() {
     if (dt > 0.1) dt = 0.1;
     if (start_hold > 0 && --start_hold == 0) host->machine().input().set_button(host::Input::Start1, false);
     pads.poll(host->machine(), dt);
+    if (!pending.empty()) [self fireTouches:platform::Controllers::now_seconds()];
     if (pads.take_activity()) pad_mode = true;  // controller play: Start is on the pad
     start.hidden = pad_mode;
     if (auto f = host->take_new()) renderer->draw(*f);
@@ -216,10 +303,25 @@ std::string find_content() {
 
 @implementation SceneDelegate
 - (void)scene:(UIScene*)scene willConnectToSession:(UISceneSession*)session options:(UISceneConnectionOptions*)options {
-    self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene*)scene];
+    UIWindowScene* ws = (UIWindowScene*)scene;
+    self.window = [[UIWindow alloc] initWithWindowScene:ws];
     self.window.rootViewController = [GameViewController new];
     [self.window makeKeyAndVisible];
+#if TARGET_OS_VISION
+    // A floating window, resized uniformly so the bars beside the picture
+    // keep room for START (right) and a reload pinch (either side).
+    UIWindowSceneGeometryPreferencesVision* g = [[UIWindowSceneGeometryPreferencesVision alloc] initWithSize:kWindowSize];
+    g.minimumSize = CGSizeMake(kWindowSize.width * 0.5, kWindowSize.height * 0.5);
+    g.maximumSize = CGSizeMake(kWindowSize.width * 2.5, kWindowSize.height * 2.5);
+    g.resizingRestrictions = UIWindowSceneResizingRestrictionsUniform;
+    [ws requestGeometryUpdateWithPreferences:g errorHandler:nil];
+#endif
 }
+// Controllers report only to the active app: logged to tell the two apart.
+- (void)sceneDidBecomeActive:(UIScene*)scene { platform::input_log("scene active"); }
+- (void)sceneWillResignActive:(UIScene*)scene { platform::input_log("scene inactive"); }
+- (void)sceneDidEnterBackground:(UIScene*)scene { platform::input_log("scene background"); }
+- (void)sceneWillEnterForeground:(UIScene*)scene { platform::input_log("scene foreground"); }
 @end
 
 @interface AppDelegate : UIResponder <UIApplicationDelegate>

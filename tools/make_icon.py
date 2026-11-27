@@ -14,6 +14,7 @@ itself. Outputs, read by CMakeLists.txt when they exist:
     build/icon/icon_1024.png
     build/icon/VoyagerArcade.icns        (Mac app)
     build/icon/Assets.xcassets           (iOS app, compiled by actool)
+    build/icon/AssetsVision.xcassets     (visionOS: the scene behind, the logo in front)
 
 Needs Pillow; it is installed into build/pylib like Capstone.
 """
@@ -99,6 +100,47 @@ def ios_assets(png, xcassets):
                    "info": {"author": "xcode", "version": 1}}, f, indent=2)
 
 
+def vision_assets(png, xcassets):
+    """visionOS icons are round and layered: the logo floats over the scene."""
+    Image, ImageDraw, ImageFilter = pillow()
+    scene = Image.open(png).convert("RGB")
+    px = scene.load()
+    mask = Image.new("L", scene.size, 0)
+    mp = mask.load()
+    for y in range(scene.height):  # the logo is red, orange and yellow; the cube grey and green
+        for x in range(scene.width):
+            r, g, b = px[x, y]
+            if r > 140 and r > g * 1.15 and r > b * 2.0:
+                mp[x, y] = 255
+    mask = mask.filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.MinFilter(3)).filter(ImageFilter.GaussianBlur(1.2))
+    front = scene.copy()
+    front.putalpha(mask)
+    small = front.resize((round(N * 0.86), round(N * 0.86)), Image.LANCZOS)  # inside the circle
+    front = Image.new("RGBA", (N, N), (0, 0, 0, 0))
+    front.paste(small, ((N - small.width) // 2, (N - small.height) // 2))
+    hole = mask.filter(ImageFilter.MaxFilter(9)).filter(ImageFilter.GaussianBlur(6))
+    back = Image.composite(scene.filter(ImageFilter.GaussianBlur(14)), scene, hole)
+
+    stack = os.path.join(xcassets, "AppIcon.solidimagestack")
+    info = {"author": "xcode", "version": 1}
+    os.makedirs(stack, exist_ok=True)
+    with open(os.path.join(xcassets, "Contents.json"), "w") as f:
+        json.dump({"info": info}, f, indent=2)
+    with open(os.path.join(stack, "Contents.json"), "w") as f:
+        json.dump({"info": info, "layers": [{"filename": "Front.solidimagestacklayer"},
+                                            {"filename": "Back.solidimagestacklayer"}]}, f, indent=2)
+    for name, image in (("Front", front), ("Back", back)):
+        layer = os.path.join(stack, name + ".solidimagestacklayer")
+        imageset = os.path.join(layer, "Content.imageset")
+        os.makedirs(imageset, exist_ok=True)
+        with open(os.path.join(layer, "Contents.json"), "w") as f:
+            json.dump({"info": info}, f, indent=2)
+        image.save(os.path.join(imageset, name.lower() + ".png"))
+        with open(os.path.join(imageset, "Contents.json"), "w") as f:
+            json.dump({"images": [{"filename": name.lower() + ".png", "idiom": "vision", "scale": "2x"}],
+                       "info": info}, f, indent=2)
+
+
 def main():
     if len(sys.argv) not in (2, 3):
         sys.exit("usage: tools/make_icon.py <game folder> [vgrun]")
@@ -114,6 +156,9 @@ def main():
     xcassets = os.path.join(OUT, "Assets.xcassets")
     shutil.rmtree(xcassets, ignore_errors=True)
     ios_assets(png, xcassets)
+    vision = os.path.join(OUT, "AssetsVision.xcassets")
+    shutil.rmtree(vision, ignore_errors=True)
+    vision_assets(png, vision)
     print("icon written to", OUT)
 
 

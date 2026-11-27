@@ -22,9 +22,10 @@ committed; the translated code is generated from your files at build time.
 
 ## Status
 
-The game, its sound synthesizer and its service menu run on the Mac and on
-iPhone and iPad, with sound, light-gun input from the mouse, touch or a game
-controller, and the cabinet's settings, audits and high scores. Decompilation
+The game, its sound synthesizer and its service menu run on the Mac, on
+iPhone and iPad, and on Apple Vision Pro, with sound, light-gun input from
+the mouse, touch, gaze and pinch, a game controller or PlayStation VR2 Sense
+controllers, and the cabinet's settings, audits and high scores. Decompilation
 has begun with the vector math of `ps_math_3d.c`.
 
 ## Building
@@ -49,7 +50,7 @@ That gives `build/mac/Voyager Arcade.app` and `build/mac/vgrun`.
 
 Optionally, make the app icon from your copy's title screen (it renders the
 attract mode to the title logo with `vgrun`; like the translations, it is
-never committed), then configure and build again. The Mac and iOS apps use it
+never committed), then configure and build again. The Mac, iOS and visionOS apps use it
 when `build/icon` exists:
 
 ```bash
@@ -146,6 +147,47 @@ xcrun devicectl device copy to --device <device id> --domain-type appDataContain
 
 Reinstalling keeps the game files; deleting the app removes them.
 
+## Apple Vision Pro
+
+The iOS app also builds natively for visionOS. It opens in a floating
+window that you can move and resize (it keeps its 16:10 shape, the 4:3
+picture between black bars):
+
+```bash
+cmake --preset visionos-sim
+```
+
+```bash
+cmake --build --preset visionos-sim
+```
+
+For the headset, as for an iPhone (the same entitlements, the same bundle
+id):
+
+```bash
+cmake --preset visionos-device -DVOY_IOS_TEAM=<team id>
+```
+
+```bash
+xcodebuild -project build/visionos-device/VoyagerArcade.xcodeproj -target VoyagerArcadeIOS -configuration RelWithDebInfo -allowProvisioningUpdates
+```
+
+Then install it and copy the game folder with `devicectl` as for an iPhone
+(the app is `build/visionos-device/RelWithDebInfo-xros/VoyagerArcade.app`).
+
+| Action | Eyes and hands | Game controller | PlayStation VR2 Sense |
+|---|---|---|---|
+| Shoot | look and pinch | right trigger or A | point at the picture and pull the trigger (untracked: aim the crosshair with the thumbstick) |
+| Reload / remodulate | look at a black bar and pinch, or pinch with both hands | left trigger, B or right shoulder | grip, or point off the picture and pull the trigger |
+| Start | START (right bar) | Menu | Cross or Square (or Options / Create) |
+| Insert coin | | Options / View | Circle or Triangle |
+
+Each Sense controller is a light gun: the right-hand one is player 1 and the
+left-hand one player 2 (a lone one is player 1); gamepads take the places
+left. The crosshair follows where a Sense controller points once the app has
+the accessory tracking permission it asks for on first use (Settings,
+Privacy & Security, if it was declined).
+
 ## Testing
 
 ```bash
@@ -198,5 +240,5 @@ Options: `--container <dir>`, `--frames N`, `--sound` (run stvsnd too),
 | `src/gpu` | Metal renderer |
 | `src/decomp` | decompiled game functions |
 | `src/app` | content check, headless runner |
-| `src/platform` | Mac app, iOS app, shared Apple pieces (audio, controllers, game thread) |
+| `src/platform` | Mac app, iOS and visionOS app (`ios`, with `visionos/Info.plist.in`), shared Apple pieces (audio, controllers, game thread) |
 | `tests` | CTest suite |

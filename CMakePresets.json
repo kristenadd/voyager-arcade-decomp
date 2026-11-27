@@ -6,7 +6,10 @@
       "displayName": "Mac (Apple silicon): app, vgrun, tests",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/mac",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "CMAKE_OSX_ARCHITECTURES": "arm64" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_OSX_ARCHITECTURES": "arm64"
+      }
     },
     {
       "name": "ios-sim",
@@ -33,13 +36,55 @@
         "CMAKE_OSX_DEPLOYMENT_TARGET": "17.0",
         "VOY_BUILD_TESTS": "OFF"
       }
+    },
+    {
+      "name": "visionos-sim",
+      "displayName": "visionOS Simulator, signed ad hoc",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/visionos-sim",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_SYSTEM_NAME": "visionOS",
+        "CMAKE_OSX_SYSROOT": "xrsimulator",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "26.0",
+        "VOY_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "visionos-device",
+      "displayName": "Apple Vision Pro: an Xcode project signed for your team (-DVOY_IOS_TEAM=<team id>)",
+      "generator": "Xcode",
+      "binaryDir": "${sourceDir}/build/visionos-device",
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "visionOS",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "26.0",
+        "VOY_BUILD_TESTS": "OFF"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "mac-host", "configurePreset": "mac-host" },
-    { "name": "ios-sim", "configurePreset": "ios-sim" }
+    {
+      "name": "mac-host",
+      "configurePreset": "mac-host"
+    },
+    {
+      "name": "ios-sim",
+      "configurePreset": "ios-sim"
+    },
+    {
+      "name": "visionos-sim",
+      "configurePreset": "visionos-sim"
+    }
   ],
   "testPresets": [
-    { "name": "mac-host", "configurePreset": "mac-host", "output": { "outputOnFailure": true } }
+    {
+      "name": "mac-host",
+      "configurePreset": "mac-host",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
   ]
 }

@@ -1,6 +1,25 @@
 cmake_minimum_required(VERSION 3.24)
 project(VoyagerArcade LANGUAGES C CXX OBJC OBJCXX)
 
+# iOS / iPadOS and visionOS share the touch app (src/platform/ios).
+set(VOY_MOBILE OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+  set(VOY_MOBILE ON)
+endif()
+# visionOS: Sense controller aiming is Swift (RealityKit, src/platform/visionos/aim.swift).
+if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+  set(voy_xros_min "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+  if(NOT voy_xros_min)
+    set(voy_xros_min 26.0)
+  endif()
+  if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+    set(CMAKE_Swift_COMPILER_TARGET "arm64-apple-xros${voy_xros_min}-simulator")
+  else()
+    set(CMAKE_Swift_COMPILER_TARGET "arm64-apple-xros${voy_xros_min}")
+  endif()
+  enable_language(Swift)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_OBJCXX_STANDARD 20)
@@ -28,6 +47,12 @@ if(EXISTS "${VOY_ICON_DIR}/Assets.xcassets")
     <dict><key>CFBundlePrimaryIcon</key><dict>
         <key>CFBundleIconFiles</key><array><string>AppIcon60x60</string><string>AppIcon76x76</string></array>
         <key>CFBundleIconName</key><string>AppIcon</string></dict></dict>
+]=])
+endif()
+set(VOY_VISION_ICON_PLIST "")
+if(EXISTS "${VOY_ICON_DIR}/AssetsVision.xcassets")
+  set(VOY_VISION_ICON_PLIST [=[    <key>CFBundleIcons</key>
+    <dict><key>CFBundlePrimaryIcon</key><dict><key>CFBundleIconName</key><string>AppIcon</string></dict></dict>
 ]=])
 endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${VOY_ICON_DIR}")
@@ -96,7 +121,7 @@ if(APPLE AND EXISTS "${CMAKE_SOURCE_DIR}/src/gpu/metal_renderer.mm")
                                          "-framework CoreGraphics" "-framework ImageIO")
 endif()
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if(NOT VOY_MOBILE)
   add_executable(vgrun tools/vgrun/main.cpp)
   target_link_libraries(vgrun PRIVATE voy_game)
   if(TARGET voy_metal)
@@ -104,7 +129,7 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
   endif()
 endif()
 
-if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND VOY_BUILD_MAC_APP AND EXISTS "${CMAKE_SOURCE_DIR}/src/platform/macos/main.mm")
+if(APPLE AND NOT VOY_MOBILE AND VOY_BUILD_MAC_APP AND EXISTS "${CMAKE_SOURCE_DIR}/src/platform/macos/main.mm")
   add_executable(VoyagerArcade MACOSX_BUNDLE
     src/platform/macos/main.mm
     src/platform/apple/game_host.mm
@@ -123,7 +148,22 @@ if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND VOY_BUILD_MAC_APP AND EXIS
   endif()
 endif()
 
-if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if(VOY_MOBILE)
+  if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+    set(voy_plist "${CMAKE_SOURCE_DIR}/src/platform/visionos/Info.plist.in")
+    set(voy_family "7")
+    set(voy_assets "${VOY_ICON_DIR}/AssetsVision.xcassets")
+    set(voy_actool_os xros)
+    set(voy_actool_devices --target-device vision)
+    set(voy_actool_min 26.0)
+  else()
+    set(voy_plist "${CMAKE_SOURCE_DIR}/src/platform/ios/Info.plist.in")
+    set(voy_family "1,2")
+    set(voy_assets "${VOY_ICON_DIR}/Assets.xcassets")
+    set(voy_actool_os iphoneos)
+    set(voy_actool_devices --target-device iphone --target-device ipad)
+    set(voy_actool_min 17.0)
+  endif()
   add_executable(VoyagerArcadeIOS MACOSX_BUNDLE
     src/platform/ios/main.mm
     src/platform/apple/game_host.mm
@@ -133,36 +173,58 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   target_link_libraries(VoyagerArcadeIOS PRIVATE voy_game voy_metal
     "-framework UIKit" "-framework MetalKit" "-framework AudioToolbox" "-framework AVFAudio" "-framework GameController")
   set_target_properties(VoyagerArcadeIOS PROPERTIES
-    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/src/platform/ios/Info.plist.in"
+    MACOSX_BUNDLE_INFO_PLIST "${voy_plist}"
     OUTPUT_NAME "VoyagerArcade"
     XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_SOURCE_DIR}/src/platform/ios/VoyagerArcade.entitlements"
-    XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+    XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "${voy_family}"
     MACOSX_BUNDLE_GUI_IDENTIFIER "${VOY_IOS_BUNDLE_ID}"
     XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${VOY_IOS_BUNDLE_ID}")
+  if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+    # The Swift is a library of its own, away from the C++ flags swiftc cannot
+    # take; clang links the app, and the Swift objects name the runtime
+    # libraries they need, found in the SDK and the toolchain.
+    add_library(voy_vision_swift STATIC src/platform/visionos/aim.swift)
+    set_target_properties(voy_vision_swift PROPERTIES Swift_LANGUAGE_VERSION 6)
+    target_link_libraries(VoyagerArcadeIOS PRIVATE voy_vision_swift
+      "-framework RealityKit" "-framework SwiftUI" "-framework ARKit")
+    if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+      set(voy_swift_platform xrsimulator)
+    else()
+      set(voy_swift_platform xros)
+    endif()
+    execute_process(COMMAND xcrun --find swiftc OUTPUT_VARIABLE voy_swiftc OUTPUT_STRIP_TRAILING_WHITESPACE)
+    get_filename_component(voy_toolchain "${voy_swiftc}" DIRECTORY)
+    get_filename_component(voy_toolchain "${voy_toolchain}" DIRECTORY)
+    execute_process(COMMAND xcrun --sdk ${voy_swift_platform} --show-sdk-path
+                    OUTPUT_VARIABLE voy_swift_sdk OUTPUT_STRIP_TRAILING_WHITESPACE)
+    set_target_properties(VoyagerArcadeIOS PROPERTIES LINKER_LANGUAGE CXX)
+    target_link_options(VoyagerArcadeIOS PRIVATE "-L${voy_swift_sdk}/usr/lib/swift"
+                                                 "-L${voy_toolchain}/lib/swift/${voy_swift_platform}")
+  endif()
   if(VOY_IOS_TEAM)
     set_target_properties(VoyagerArcadeIOS PROPERTIES
       XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${VOY_IOS_TEAM}"
       XCODE_ATTRIBUTE_CODE_SIGN_STYLE Automatic)
   endif()
-  if(EXISTS "${VOY_ICON_DIR}/Assets.xcassets" AND CMAKE_GENERATOR STREQUAL "Xcode")
+  if(EXISTS "${voy_assets}" AND CMAKE_GENERATOR STREQUAL "Xcode")
     # Xcode compiles the asset catalog itself.
-    target_sources(VoyagerArcadeIOS PRIVATE "${VOY_ICON_DIR}/Assets.xcassets")
-    set_source_files_properties("${VOY_ICON_DIR}/Assets.xcassets" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    target_sources(VoyagerArcadeIOS PRIVATE "${voy_assets}")
+    set_source_files_properties("${voy_assets}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
     set_target_properties(VoyagerArcadeIOS PROPERTIES XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME AppIcon)
-  elseif(EXISTS "${VOY_ICON_DIR}/Assets.xcassets")
-    # Elsewhere actool writes Assets.car and the AppIcon PNGs into the bundle
-    # (before the ad hoc signing below); the Info.plist names them
+  elseif(EXISTS "${voy_assets}")
+    # Elsewhere actool writes Assets.car and the AppIcon images into the
+    # bundle (before the ad hoc signing below); the Info.plist names them
     # (VOY_IOS_ICON_PLIST).
     if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
-      set(voy_actool_platform iphonesimulator)
+      string(REPLACE "os" "simulator" voy_actool_platform "${voy_actool_os}")  # iphoneos → iphonesimulator, xros → xrsimulator
     else()
-      set(voy_actool_platform iphoneos)
+      set(voy_actool_platform ${voy_actool_os})
     endif()
     add_custom_command(TARGET VoyagerArcadeIOS POST_BUILD
       COMMAND xcrun actool --compile $<TARGET_BUNDLE_DIR:VoyagerArcadeIOS> --platform ${voy_actool_platform}
-              --minimum-deployment-target 17.0 --target-device iphone --target-device ipad
+              --minimum-deployment-target ${voy_actool_min} ${voy_actool_devices}
               --app-icon AppIcon --output-partial-info-plist ${CMAKE_CURRENT_BINARY_DIR}/actool-partial.plist
-              --errors --warnings "${VOY_ICON_DIR}/Assets.xcassets"
+              --errors --warnings "${voy_assets}"
       VERBATIM)
   endif()
   if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator" AND NOT CMAKE_GENERATOR STREQUAL "Xcode")
@@ -172,7 +234,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   endif()
 endif()
 
-if(VOY_BUILD_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if(VOY_BUILD_TESTS AND NOT VOY_MOBILE)
   enable_testing()
   add_subdirectory(tests)
 endif()
