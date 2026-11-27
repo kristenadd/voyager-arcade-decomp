@@ -6,6 +6,9 @@
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <algorithm>
 #include <thread>
 
 #include "gl/gl.hpp"
@@ -130,6 +133,50 @@ Machine::Machine(Config config, Programs programs)
     fs::create_directories(config_.container, ec);
     mjf_ = make_megajamma(*this);
     dsp_ = make_dsp(*this);
+    load_script();
+}
+
+void Machine::load_script() {
+    if (config_.input_script.empty()) return;
+    std::ifstream f(config_.input_script);
+    if (!f) {
+        logf("[script] cannot read %s\n", config_.input_script.c_str());
+        return;
+    }
+    std::string line;
+    while (std::getline(f, line)) {
+        const auto hash = line.find('#');
+        if (hash != std::string::npos) line.resize(hash);
+        std::istringstream ls(line);
+        ScriptEvent e;
+        if (!(ls >> e.frame >> e.cmd)) continue;
+        std::string a;
+        while (ls >> a) e.args.push_back(a);
+        if (e.cmd == "tap-start" && !e.args.empty()) {
+            script_.push_back({e.frame, "start", {e.args[0], "down"}});
+            script_.push_back({e.frame + 6, "start", {e.args[0], "up"}});
+            continue;
+        }
+        script_.push_back(std::move(e));
+    }
+    std::stable_sort(script_.begin(), script_.end(), [](const ScriptEvent& x, const ScriptEvent& y) { return x.frame < y.frame; });
+}
+
+void Machine::run_script() {
+    while (script_next_ < script_.size() && script_[script_next_].frame <= frames_drawn_) {
+        const auto& e = script_[script_next_++];
+        auto arg = [&](std::size_t i) { return i < e.args.size() ? e.args[i] : std::string(); };
+        auto num = [&](std::size_t i) { return std::atoi(arg(i).c_str()); };
+        if (e.cmd == "coin") input_.coin(num(0));
+        else if (e.cmd == "start") input_.set_button(num(0) == 2 ? Input::Start2 : Input::Start1, arg(1) != "up");
+        else if (e.cmd == "shot") input_.shot(num(0), num(1), num(2));
+        else if (e.cmd == "reload") input_.shot(num(0), -1, -1);
+        else if (e.cmd == "test") input_.set_button(Input::Test, arg(0) != "up");
+        else if (e.cmd == "key") input_.key(arg(0).empty() ? 0 : arg(0)[0]);
+        else if (e.cmd == "quit") request_quit();
+        else logf("[script] unknown command %s\n", e.cmd.c_str());
+        logf("[script] frame %llu: %s\n", (unsigned long long)frames_drawn_.load(), e.cmd.c_str());
+    }
 }
 
 Machine::~Machine() { stop_sound(); }
@@ -226,7 +273,10 @@ Machine::AudioFormat Machine::audio_format() const { return dsp_format(*dsp_); }
 
 void Machine::pull_audio(std::int16_t* out, int frames, int rate) { dsp_pull(*dsp_, out, frames, rate); }
 
-void Machine::count_frame() { ++frames_drawn_; }
+void Machine::count_frame() {
+    ++frames_drawn_;
+    if (script_next_ < script_.size()) run_script();
+}
 
 void Machine::request_quit() {
     quit_ = true;

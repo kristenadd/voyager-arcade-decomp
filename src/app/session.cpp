@@ -97,9 +97,10 @@ namespace {
 
 class HashSink : public gl::FrameSink {
 public:
-    explicit HashSink(int every) : every_(every) {}
+    HashSink(int every, gl::FrameSink* next) : every_(every), next_(next) {}
     void submit(std::shared_ptr<const gl::Frame> f) override {
         ++frames_;
+        if (next_) next_->submit(f);
         if (every_ > 0 && f->index % std::uint64_t(every_) == 0) {
             std::uint64_t draws = 0;
             for (auto& c : f->commands) draws += c.kind == gl::Command::Draw;
@@ -112,6 +113,7 @@ public:
 
 private:
     int every_;
+    gl::FrameSink* next_;
 };
 
 }  // namespace
@@ -125,7 +127,7 @@ int run_headless(const Options& o) {
         return 3;
     }
     host::Machine m(c, built_programs());
-    HashSink sink(o.hash_every);
+    HashSink sink(o.hash_every, o.sink);
     m.gl().set_sink(&sink);
     const int code = m.run();
     std::printf("exit %d after %llu frames, last frame hash %016llx\n", code, (unsigned long long)m.frames_drawn(),

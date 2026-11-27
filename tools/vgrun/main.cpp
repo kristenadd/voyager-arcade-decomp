@@ -11,6 +11,38 @@
 #include <string>
 
 #include "app/session.hpp"
+#include "gpu/renderer.hpp"
+
+namespace {
+
+// --frame-dump <prefix> --hash-every N: every Nth frame drawn with Metal and
+// written as <prefix>_<frame>.png.
+class DumpSink : public voy::gl::FrameSink {
+public:
+    DumpSink(std::string prefix, int every) : prefix_(std::move(prefix)), every_(every > 0 ? every : 60) {
+        voy::gpu::RendererOptions ro;
+        ro.scale = 2;
+        renderer_ = voy::gpu::Renderer::create(nullptr, ro);
+    }
+    void submit(std::shared_ptr<const voy::gl::Frame> f) override {
+        if (!renderer_ || f->index % std::uint64_t(every_) != 0) return;
+        renderer_->draw(*f);
+        std::vector<std::uint8_t> px;
+        int w = 0, h = 0;
+        if (renderer_->read_rgba(px, &w, &h)) {
+            char name[64];
+            std::snprintf(name, sizeof name, "_%06llu.png", (unsigned long long)f->index);
+            voy::gpu::write_png(prefix_ + name, px, w, h);
+        }
+    }
+
+private:
+    std::string prefix_;
+    int every_;
+    std::unique_ptr<voy::gpu::Renderer> renderer_;
+};
+
+}  // namespace
 
 int main(int argc, char** argv) {
     voy::app::Options o;
@@ -44,6 +76,11 @@ int main(int argc, char** argv) {
     if (o.config.content.empty()) {
         std::fprintf(stderr, "vgrun: --content is required\n");
         return 2;
+    }
+    std::unique_ptr<DumpSink> dump;
+    if (!o.frame_dump.empty()) {
+        dump = std::make_unique<DumpSink>(o.frame_dump, o.hash_every);
+        o.sink = dump.get();
     }
     return voy::app::run_headless(o);
 }

@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 
+#include "gl/gl.hpp"
 #include "host/machine.hpp"
 
 namespace voy::app {
@@ -13,6 +14,7 @@ struct Options {
     host::Config config;
     int hash_every = 0;        // headless: print the frame hash every N frames
     std::string frame_dump;    // headless: write frames as PNG (prefix), with hash_every
+    gl::FrameSink* sink = nullptr;  // headless: also receives every frame (vgrun's PNG dumps)
 };
 
 // The translated programs built into this binary.

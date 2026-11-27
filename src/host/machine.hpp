@@ -34,7 +34,12 @@ struct Config {
     bool stdout_echo = false;     // the programs' printf output to stderr
     bool free_play = false;       // forced free play (iOS)
     int max_frames = 0;           // stop after this many drawn frames (tests)
-    std::string input_script;     // scripted input (tests): see input.hpp
+    // Scripted input (tests): one event per line, "<frame> <command> [args]",
+    // applied when that many frames have been drawn. Commands: coin <chute>,
+    // start <player> down|up, tap-start <player> (down, up 6 frames later),
+    // shot <gun> <x> <y>, reload <gun>, test down|up, key <char>, quit.
+    // '#' starts a comment.
+    std::string input_script;
 };
 
 // Translated code for each program (generated tables, per build).
@@ -157,6 +162,15 @@ private:
     std::atomic<std::uint64_t> frames_drawn_{0};
     Process* current_ = nullptr;
     std::mutex current_m_;
+    struct ScriptEvent {
+        std::uint64_t frame;
+        std::string cmd;
+        std::vector<std::string> args;
+    };
+    std::vector<ScriptEvent> script_;
+    std::size_t script_next_ = 0;
+    void load_script();
+    void run_script();
 };
 
 // The running machine's clock in nanoseconds (guest rdtsc).

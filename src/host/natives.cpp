@@ -39,3 +39,15 @@ void native_get_gun_calibrated_x_y(Cpu& c) {
 }
 
 }
+
+namespace voy::recomp {
+
+void native_coin_free_play(Cpu& c) {
+    Process& p = proc(c);
+    if (p.machine().config().free_play) return ret(c, 1);
+    // As the game: get_static_settings()->coins_per_credit <= 0.
+    const std::uint32_t settings = call_guest(c, p.sym("get_static_settings"), {});
+    ret(c, std::int32_t(ld32(c.mem, settings)) <= 0 ? 1u : 0u);
+}
+
+}

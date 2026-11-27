@@ -1492,6 +1492,9 @@ OVERRIDES_BY_NAME = {
         # The MegaJamma board's raw gun samples, calibrated: the port's
         # device hands over game coordinates directly (host/natives.cpp).
         'get_gun_calibrated_x_y': 'native_get_gun_calibrated_x_y',
+        # Free play: the settings' coins per credit <= 0, or forced by the
+        # port (the iOS app has no coin slot).
+        'coinFreePlay': 'native_coin_free_play',
     },
     'stvserv': {
         'get_frame_number': 'native_get_frame_number',

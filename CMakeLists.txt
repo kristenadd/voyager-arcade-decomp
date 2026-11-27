@@ -86,6 +86,7 @@ endif()
 if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND VOY_BUILD_MAC_APP AND EXISTS "${CMAKE_SOURCE_DIR}/src/platform/macos/main.mm")
   add_executable(VoyagerArcade MACOSX_BUNDLE
     src/platform/macos/main.mm
+    src/platform/apple/game_host.mm
     src/platform/apple/audio.mm
     src/platform/apple/controllers.mm)
   target_compile_options(VoyagerArcade PRIVATE -fobjc-arc)
@@ -99,6 +100,7 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   add_executable(VoyagerArcadeIOS MACOSX_BUNDLE
     src/platform/ios/main.mm
+    src/platform/apple/game_host.mm
     src/platform/apple/audio.mm
     src/platform/apple/controllers.mm)
   target_compile_options(VoyagerArcadeIOS PRIVATE -fobjc-arc)

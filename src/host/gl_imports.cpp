@@ -1,6 +1,8 @@
 // The OpenGL, GLU and GLUT entry points the programs import, bound to the
 // emulated gl::Context, and the GLUT main loop the game hands control to.
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "gl/gl.hpp"
@@ -16,14 +18,35 @@ using namespace recomp;
 namespace {
 
 gl::Context& G(Cpu& c) { return proc(c).machine().gl(); }
+
+// VOY_GL_TRACE=<frame>: logs that frame's GL calls with their raw arguments.
+bool tracing(Cpu& c) {
+    static long want = [] { const char* e = std::getenv("VOY_GL_TRACE"); return e ? std::atol(e) : -1L; }();
+    return want >= 0 && long(G(c).frames()) == want;
+}
+void trace(Cpu& c, const char* name, int words) {
+    if (!tracing(c)) return;
+    Args a{c};
+    std::string s = name;
+    for (int i = 0; i < words; ++i) {
+        char b[48];
+        std::snprintf(b, sizeof b, " %08X(%g)", a.u(i), double(a.f(i)));
+        s += b;
+    }
+    logf("[gl] %s\n", s.c_str());
+}
 const float* fptr(Cpu& c, std::uint32_t a) { return reinterpret_cast<const float*>(c.mem + a); }
 
-void h_glBegin(Cpu& c) { G(c).Begin(Args{c}.u(0)); ret_void(c); }
+void h_glBegin(Cpu& c) {
+    trace(c, "glBegin", 1); G(c).Begin(Args{c}.u(0)); ret_void(c); }
 void h_glEnd(Cpu& c) { G(c).End(); ret_void(c); }
-void h_glVertex2f(Cpu& c) { Args a{c}; G(c).Vertex4(a.f(0), a.f(1), 0, 1); ret_void(c); }
-void h_glVertex3f(Cpu& c) { Args a{c}; G(c).Vertex4(a.f(0), a.f(1), a.f(2), 1); ret_void(c); }
+void h_glVertex2f(Cpu& c) {
+    trace(c, "glVertex2f", 2); Args a{c}; G(c).Vertex4(a.f(0), a.f(1), 0, 1); ret_void(c); }
+void h_glVertex3f(Cpu& c) {
+    trace(c, "glVertex3f", 3); Args a{c}; G(c).Vertex4(a.f(0), a.f(1), a.f(2), 1); ret_void(c); }
 void h_glNormal3f(Cpu& c) { Args a{c}; G(c).Normal(a.f(0), a.f(1), a.f(2)); ret_void(c); }
-void h_glTexCoord2f(Cpu& c) { Args a{c}; G(c).TexCoord(a.f(0), a.f(1)); ret_void(c); }
+void h_glTexCoord2f(Cpu& c) {
+    trace(c, "glTexCoord2f", 2); Args a{c}; G(c).TexCoord(a.f(0), a.f(1)); ret_void(c); }
 void h_glColor3f(Cpu& c) { Args a{c}; G(c).Color(a.f(0), a.f(1), a.f(2), 1); ret_void(c); }
 void h_glColor4f(Cpu& c) { Args a{c}; G(c).Color(a.f(0), a.f(1), a.f(2), a.f(3)); ret_void(c); }
 void h_glColor4ubv(Cpu& c) {
@@ -33,29 +56,41 @@ void h_glColor4ubv(Cpu& c) {
 }
 void h_glRectf(Cpu& c) { Args a{c}; G(c).Rect(a.f(0), a.f(1), a.f(2), a.f(3)); ret_void(c); }
 
-void h_glMatrixMode(Cpu& c) { G(c).MatrixMode(Args{c}.u(0)); ret_void(c); }
-void h_glLoadIdentity(Cpu& c) { G(c).LoadIdentity(); ret_void(c); }
-void h_glPushMatrix(Cpu& c) { G(c).PushMatrix(); ret_void(c); }
-void h_glPopMatrix(Cpu& c) { G(c).PopMatrix(); ret_void(c); }
+void h_glMatrixMode(Cpu& c) {
+    trace(c, "glMatrixMode", 1); G(c).MatrixMode(Args{c}.u(0)); ret_void(c); }
+void h_glLoadIdentity(Cpu& c) {
+    trace(c, "glLoadIdentity", 0); G(c).LoadIdentity(); ret_void(c); }
+void h_glPushMatrix(Cpu& c) {
+    trace(c, "glPushMatrix", 0); G(c).PushMatrix(); ret_void(c); }
+void h_glPopMatrix(Cpu& c) {
+    trace(c, "glPopMatrix", 0); G(c).PopMatrix(); ret_void(c); }
 void h_glMultMatrixd(Cpu& c) {
+    trace(c, "glMultMatrixd", 1);
     double m[16];
     std::memcpy(m, c.mem + Args{c}.u(0), sizeof m);
     G(c).MultMatrix(m);
     ret_void(c);
 }
 void h_glMultMatrixf(Cpu& c) {
+    trace(c, "glMultMatrixf", 1);
     const float* f = fptr(c, Args{c}.u(0));
     double m[16];
     for (int i = 0; i < 16; ++i) m[i] = f[i];
     G(c).MultMatrix(m);
     ret_void(c);
 }
-void h_glTranslatef(Cpu& c) { Args a{c}; G(c).Translate(a.f(0), a.f(1), a.f(2)); ret_void(c); }
-void h_glTranslated(Cpu& c) { Args a{c}; G(c).Translate(a.d(0), a.d(2), a.d(4)); ret_void(c); }
-void h_glRotatef(Cpu& c) { Args a{c}; G(c).Rotate(a.f(0), a.f(1), a.f(2), a.f(3)); ret_void(c); }
-void h_glScalef(Cpu& c) { Args a{c}; G(c).Scale(a.f(0), a.f(1), a.f(2)); ret_void(c); }
-void h_glFrustum(Cpu& c) { Args a{c}; G(c).Frustum(a.d(0), a.d(2), a.d(4), a.d(6), a.d(8), a.d(10)); ret_void(c); }
-void h_glOrtho(Cpu& c) { Args a{c}; G(c).Ortho(a.d(0), a.d(2), a.d(4), a.d(6), a.d(8), a.d(10)); ret_void(c); }
+void h_glTranslatef(Cpu& c) {
+    trace(c, "glTranslatef", 3); Args a{c}; G(c).Translate(a.f(0), a.f(1), a.f(2)); ret_void(c); }
+void h_glTranslated(Cpu& c) {
+    trace(c, "glTranslated", 6); Args a{c}; G(c).Translate(a.d(0), a.d(2), a.d(4)); ret_void(c); }
+void h_glRotatef(Cpu& c) {
+    trace(c, "glRotatef", 4); Args a{c}; G(c).Rotate(a.f(0), a.f(1), a.f(2), a.f(3)); ret_void(c); }
+void h_glScalef(Cpu& c) {
+    trace(c, "glScalef", 3); Args a{c}; G(c).Scale(a.f(0), a.f(1), a.f(2)); ret_void(c); }
+void h_glFrustum(Cpu& c) {
+    trace(c, "glFrustum", 12); Args a{c}; G(c).Frustum(a.d(0), a.d(2), a.d(4), a.d(6), a.d(8), a.d(10)); ret_void(c); }
+void h_glOrtho(Cpu& c) {
+    trace(c, "glOrtho", 12); Args a{c}; G(c).Ortho(a.d(0), a.d(2), a.d(4), a.d(6), a.d(8), a.d(10)); ret_void(c); }
 void h_gluPerspective(Cpu& c) { Args a{c}; G(c).Perspective(a.d(0), a.d(2), a.d(4), a.d(6)); ret_void(c); }
 void h_gluLookAt(Cpu& c) {
     Args a{c};
@@ -63,7 +98,8 @@ void h_gluLookAt(Cpu& c) {
     G(c).LookAt(e, ce, u);
     ret_void(c);
 }
-void h_glViewport(Cpu& c) { Args a{c}; G(c).Viewport(a.i(0), a.i(1), a.i(2), a.i(3)); ret_void(c); }
+void h_glViewport(Cpu& c) {
+    trace(c, "glViewport", 4); Args a{c}; G(c).Viewport(a.i(0), a.i(1), a.i(2), a.i(3)); ret_void(c); }
 void h_glScissor(Cpu& c) { Args a{c}; G(c).Scissor(a.i(0), a.i(1), a.i(2), a.i(3)); ret_void(c); }
 
 void h_glEnable(Cpu& c) { G(c).Enable(Args{c}.u(0), true); ret_void(c); }

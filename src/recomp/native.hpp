@@ -13,5 +13,6 @@ void native_wait_for_vblank(Cpu& c);    // void wait_for_vblank(int min_period)
 void native_read_cpu_mhz(Cpu& c);       // int read_cpu_MHz(void): 1000
 void native_get_cpu_mhz(Cpu& c);        // float get_cpu_mhz(void): 1000.0 in st(0)
 void native_get_gun_calibrated_x_y(Cpu& c);  // (int* x, int* y, uint* packet, int gun)
+void native_coin_free_play(Cpu& c);     // int coinFreePlay(void)
 
 }
