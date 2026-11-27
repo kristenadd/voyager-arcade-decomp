@@ -14,6 +14,23 @@ set(VOY_GENERATED_DIR "${CMAKE_SOURCE_DIR}/build/x86tr" CACHE PATH "tools/prepar
 option(VOY_BUILD_MAC_APP "Build the Mac app" ON)
 option(VOY_BUILD_TESTS "Build the tests" ON)
 set(VOY_IOS_BUNDLE_ID "local.voyagerarcade.ios" CACHE STRING "iOS bundle identifier")
+
+# The app icon, made from the player's own title screen by tools/make_icon.py
+# (never committed). Without it the apps get the system's blank icon.
+set(VOY_ICON_DIR "${CMAKE_SOURCE_DIR}/build/icon")
+set(VOY_IOS_ICON_PLIST "")
+if(EXISTS "${VOY_ICON_DIR}/Assets.xcassets")
+  set(VOY_IOS_ICON_PLIST [=[    <key>CFBundleIcons</key>
+    <dict><key>CFBundlePrimaryIcon</key><dict>
+        <key>CFBundleIconFiles</key><array><string>AppIcon60x60</string></array>
+        <key>CFBundleIconName</key><string>AppIcon</string></dict></dict>
+    <key>CFBundleIcons~ipad</key>
+    <dict><key>CFBundlePrimaryIcon</key><dict>
+        <key>CFBundleIconFiles</key><array><string>AppIcon60x60</string><string>AppIcon76x76</string></array>
+        <key>CFBundleIconName</key><string>AppIcon</string></dict></dict>
+]=])
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${VOY_ICON_DIR}")
 set(VOY_IOS_TEAM "" CACHE STRING "Apple development team for iOS device builds")
 
 # The manifest as a C++ string.
@@ -99,6 +116,11 @@ if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND VOY_BUILD_MAC_APP AND EXIS
   set_target_properties(VoyagerArcade PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/src/platform/macos/Info.plist.in"
     OUTPUT_NAME "Voyager Arcade")
+  if(EXISTS "${VOY_ICON_DIR}/VoyagerArcade.icns")
+    target_sources(VoyagerArcade PRIVATE "${VOY_ICON_DIR}/VoyagerArcade.icns")
+    set_source_files_properties("${VOY_ICON_DIR}/VoyagerArcade.icns" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    set_target_properties(VoyagerArcade PROPERTIES MACOSX_BUNDLE_ICON_FILE VoyagerArcade.icns)
+  endif()
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
@@ -115,13 +137,35 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     OUTPUT_NAME "VoyagerArcade"
     XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_SOURCE_DIR}/src/platform/ios/VoyagerArcade.entitlements"
     XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
-    MACOSX_BUNDLE_GUI_IDENTIFIER "${VOY_IOS_BUNDLE_ID}")
+    MACOSX_BUNDLE_GUI_IDENTIFIER "${VOY_IOS_BUNDLE_ID}"
+    XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${VOY_IOS_BUNDLE_ID}")
   if(VOY_IOS_TEAM)
     set_target_properties(VoyagerArcadeIOS PROPERTIES
       XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${VOY_IOS_TEAM}"
       XCODE_ATTRIBUTE_CODE_SIGN_STYLE Automatic)
   endif()
-  if(CMAKE_OSX_SYSROOT MATCHES "simulator" AND NOT CMAKE_GENERATOR STREQUAL "Xcode")
+  if(EXISTS "${VOY_ICON_DIR}/Assets.xcassets" AND CMAKE_GENERATOR STREQUAL "Xcode")
+    # Xcode compiles the asset catalog itself.
+    target_sources(VoyagerArcadeIOS PRIVATE "${VOY_ICON_DIR}/Assets.xcassets")
+    set_source_files_properties("${VOY_ICON_DIR}/Assets.xcassets" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    set_target_properties(VoyagerArcadeIOS PROPERTIES XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME AppIcon)
+  elseif(EXISTS "${VOY_ICON_DIR}/Assets.xcassets")
+    # Elsewhere actool writes Assets.car and the AppIcon PNGs into the bundle
+    # (before the ad hoc signing below); the Info.plist names them
+    # (VOY_IOS_ICON_PLIST).
+    if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+      set(voy_actool_platform iphonesimulator)
+    else()
+      set(voy_actool_platform iphoneos)
+    endif()
+    add_custom_command(TARGET VoyagerArcadeIOS POST_BUILD
+      COMMAND xcrun actool --compile $<TARGET_BUNDLE_DIR:VoyagerArcadeIOS> --platform ${voy_actool_platform}
+              --minimum-deployment-target 17.0 --target-device iphone --target-device ipad
+              --app-icon AppIcon --output-partial-info-plist ${CMAKE_CURRENT_BINARY_DIR}/actool-partial.plist
+              --errors --warnings "${VOY_ICON_DIR}/Assets.xcassets"
+      VERBATIM)
+  endif()
+  if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator" AND NOT CMAKE_GENERATOR STREQUAL "Xcode")
     # The Simulator runs ad hoc signed apps.
     add_custom_command(TARGET VoyagerArcadeIOS POST_BUILD
       COMMAND codesign --force --sign - --timestamp=none $<TARGET_BUNDLE_DIR:VoyagerArcadeIOS>)

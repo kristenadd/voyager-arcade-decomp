@@ -52,6 +52,15 @@ cmake --build --preset mac-host
 
 That gives `build/mac/Voyager Arcade.app` and `build/mac/vgrun`.
 
+Optionally, make the app icon from your copy's title screen (it renders the
+attract mode to the title logo with `vgrun`; like the translations, it is
+never committed), then configure and build again. The Mac and iOS apps use it
+when `build/icon` exists:
+
+```bash
+python3 tools/make_icon.py "<game folder>"
+```
+
 ## Playing on the Mac
 
 ```bash
@@ -156,6 +165,7 @@ Options: `--container <dir>`, `--frames N`, `--sound` (run stvsnd too),
 | `tools/stabs` | STABS inventory (`stabs.py`) and reference header (`stabs2h.py`) |
 | `tools/formats/segdump.py` | walks a `.seg` video file and writes frames as PNG |
 | `tools/prepare.sh`, `tools/make_manifests.py` | translation step, manifest |
+| `tools/make_icon.py` | app icon from the game's title screen (`build/icon`) |
 | `src/recomp` | guest CPU state, memory, dispatch, natives |
 | `src/host` | the Linux host: processes, libc, stdio, devices, GLUT, the supervisor (`machine.cpp`) |
 | `src/gl` | OpenGL 1.x emulation |

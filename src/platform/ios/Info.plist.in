@@ -12,7 +12,7 @@
     <key>CFBundleShortVersionString</key><string>0.1</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>LSRequiresIPhoneOS</key><true/>
-    <key>MinimumOSVersion</key><string>17.0</string>
+${VOY_IOS_ICON_PLIST}    <key>MinimumOSVersion</key><string>17.0</string>
     <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
     <key>UIFileSharingEnabled</key><true/>
     <key>LSSupportsOpeningDocumentsInPlace</key><true/>
