@@ -88,8 +88,10 @@ high scores and logs live in `~/Library/Application Support/VoyagerArcade`.
 | Pause / resume (the game's debug keys) | P / O | none |
 | Full screen, quit | Ctrl-Cmd-F, Cmd-Q | none |
 
-A second controller is player 2. The controller's crosshair shows once you use
-it and hides when you click the mouse. The Mac app runs in free play; to use the
+Two controllers give a two-player game: the first is player 1 (red
+crosshair), the second player 2 (blue crosshair, Start joins as player 2).
+The crosshairs show once a controller is used and hide when you click the
+mouse. The Mac app runs in free play; to use the
 coin settings of the service menu instead,
 `defaults write local.voyagerarcade.mac FreePlay -bool false`.
 
@@ -115,7 +117,7 @@ cp -cR "<game folder>" "$(xcrun simctl get_app_container booted local.voyagerarc
 Free play is forced on iOS. The **START** button (bottom right) starts a
 game. A tap on the picture shoots where it lands; a tap anywhere outside it
 (the black bars) or a two-finger tap reloads and remodulates. Controllers
-work as on the Mac (Menu also starts). Using one shows its crosshair and hides
+work as on the Mac, two of them for two players (Menu also starts). Using one shows its crosshair and hides
 the START button; touching the screen hides the crosshair and brings the
 button back.
 

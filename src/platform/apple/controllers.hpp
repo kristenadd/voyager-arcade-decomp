@@ -2,7 +2,8 @@
 // Game controllers as light guns: the left stick (or right stick) moves a
 // crosshair, A / right trigger fires (held: repeats), B / left trigger
 // reloads and remodulates (an off-screen shot), Menu is start, Options /
-// View inserts a coin. The first controller is player 1, the second player 2.
+// View inserts a coin. The first controller is player 1 (red crosshair), the
+// second player 2 (blue crosshair).
 #include "gpu/renderer.hpp"
 
 namespace voy::host {

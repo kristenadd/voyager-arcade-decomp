@@ -25,6 +25,14 @@ void Controllers::poll(host::Machine& m, double dt) {
             continue;
         }
         pl.connected = true;
+        // The pad's player LEDs and light bar (where it has them) match its crosshair.
+        GCController* pad = pads[NSUInteger(i)];
+        const GCControllerPlayerIndex index = i == 0 ? GCControllerPlayerIndex1 : GCControllerPlayerIndex2;
+        if (pad.playerIndex != index) {
+            pad.playerIndex = index;
+            if (pad.light) pad.light.color = i == 0 ? [[GCColor alloc] initWithRed:1 green:0 blue:0]
+                                                    : [[GCColor alloc] initWithRed:0 green:0.3f blue:1];
+        }
         float sx = g.leftThumbstick.xAxis.value, sy = g.leftThumbstick.yAxis.value;
         if (std::fabs(g.rightThumbstick.xAxis.value) + std::fabs(g.rightThumbstick.yAxis.value) > std::fabs(sx) + std::fabs(sy)) {
             sx = g.rightThumbstick.xAxis.value;
@@ -70,9 +78,10 @@ void Controllers::cursors(gpu::Renderer::Cursor out[2]) const {
         out[i].visible = p_[i].connected;
         out[i].x = p_[i].x;
         out[i].y = p_[i].y;
-        out[i].r = i == 0 ? 1.0f : 0.3f;
-        out[i].g = i == 0 ? 0.85f : 0.8f;
-        out[i].b = i == 0 ? 0.2f : 1.0f;
+        // Player 1 red, player 2 blue.
+        out[i].r = i == 0 ? 1.0f : 0.2f;
+        out[i].g = i == 0 ? 0.15f : 0.5f;
+        out[i].b = i == 0 ? 0.15f : 1.0f;
     }
 }
 
