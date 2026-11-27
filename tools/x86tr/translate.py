@@ -1467,6 +1467,18 @@ class FunctionTranslator(X87Mixin, SseMixin):
 # The entry statement runs after PROLOGUE in the function that holds the site.
 SITE_OVERRIDES = {}
 
+
+def decomp_names(program):
+    """The functions src/decomp replaces for `program` (VOY_DECOMP markers)."""
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'src', 'decomp')
+    names = set()
+    if os.path.isdir(root):
+        for fn in os.listdir(root):
+            if fn.endswith('.cpp'):
+                with open(os.path.join(root, fn)) as f:
+                    names.update(n for p, n in re.findall(r'^VOY_DECOMP\((\w+), (\w+)\)', f.read(), re.M) if p == program)
+    return names
+
 # TRANSLATE_PRESERVE=1: callers reload only the registers a callee may change
 # (preserved_regs, RELOAD_AFTER). Off by default.
 import os as _os
@@ -1695,6 +1707,7 @@ def main():
     img = Image(args.cache, data.get('edition'))
     names = {fn['name']: fn['entry'] for fn in data['functions']}
     OVERRIDES[img.edition] = {names[n]: native for n, native in OVERRIDES_BY_NAME.get(img.edition, {}).items()}
+    decomp = {names[n]: n for n in decomp_names(img.edition) if n in names}
     tr = Translator(img, data)
     starts = sorted(tr.functions)
     SHARD_STARTS = tuple(starts[i] for i in range(0, len(starts), SHARD_FUNCTIONS))
@@ -1753,6 +1766,12 @@ def main():
             stubs.append(STUB % (entry, entry, ('unsupported: ' + reason).replace('"', "'")))
             failed += 1
             continue
+        if entry in decomp:
+            # The translation stays as orig_<address>; f_<address> picks the
+            # decompiled function unless VOY_DECOMP=0 (src/decomp/decomp.hpp).
+            text = text.replace('void f_%08X(Cpu& c) {' % entry, 'void orig_%08X(Cpu& c) {' % entry, 1)
+            text += ('\nvoid f_%08X(Cpu& c) { if (::voy::decomp::enabled()) ::voy::decomp::%s_%s(c); else orig_%08X(c); }'
+                     % (entry, tr.img.edition, decomp[entry], entry))
         bodies[start].append(text)
         translated_set.add(entry)
         refs_of[start] |= refs
@@ -1772,8 +1791,11 @@ def main():
             continue
         name = 'tr_%08X.cpp' % start
         decls = ['void f_%08X(Cpu&);' % r for r in sorted(refs_of[start])]
+        decls += ['void orig_%08X(Cpu&);' % e for e in sorted(decomp)]
         body = tr.resolve_sync_to('\n\n'.join(bodies[start]), translated_set)
-        write_if_changed(os.path.join(args.out, name), HEADER + ns_open + '\n'.join(decls) + '\n\n' + body + '\n' + ns_close)
+        dns = ''.join('namespace voy::decomp { void %s_%s(::voy::recomp::Cpu&); bool enabled(); }\n' % (tr.img.edition, n)
+                      for n in sorted(decomp.values()))
+        write_if_changed(os.path.join(args.out, name), HEADER + dns + ns_open + '\n'.join(decls) + '\n\n' + body + '\n' + ns_close)
         shards.append(name)
     keep = set(shards)
     for name in os.listdir(args.out):
@@ -1787,7 +1809,11 @@ def main():
     table += ['void f_%08X(Cpu&);' % e for e in entries]
     table.append(ns_close + '\nnamespace voy::recomp {\n\nstatic const GuestEntry k_entries[] = {')
     table += ['    {0x%08Xu, %s::f_%08X},' % (e, ns, e) for e in entries]
-    table.append('};\n\nstd::span<const GuestEntry> translated_entries_%s() { return k_entries; }\n\n}' % edition)
+    table.append('};\n\nstd::span<const GuestEntry> translated_entries_%s() { return k_entries; }\n' % edition)
+    table.append('}\n\nnamespace %s {\n%s\n}\nnamespace voy::recomp {\n' % (ns, '\n'.join('void orig_%08X(Cpu&);' % e for e in sorted(decomp))))
+    table.append('static const DecompPair k_decomp[] = {%s};' % (''.join(
+        '\n    {0x%08Xu, "%s", %s::orig_%08X},' % (e, decomp[e], ns, e) for e in sorted(decomp)) or '{0, nullptr, nullptr}'))
+    table.append('std::span<const DecompPair> decomp_pairs_%s() { return {k_decomp, %d}; }\n\n}' % (edition, len(decomp)))
     write_if_changed(os.path.join(args.out, 'entries.cpp'), '\n'.join(table) + '\n')
     report = {
         'edition': tr.data.get('edition'),
@@ -1795,6 +1821,7 @@ def main():
         'translated_instructions': insns_done, 'stubs': len(stubs), 'shards': shards,
         'reasons': [{'reason': r, 'functions': n, 'samples': samples[r]} for r, n in reasons.most_common()],
         'overrides': [{'address': '%08X' % e, 'native': name} for e, name in overridden],
+        'decompiled': [{'address': '%08X' % e, 'name': n} for e, n in sorted(decomp.items())],
         'trapped_instructions': trapped_total,
         'trap_reasons': [{'reason': r, 'instructions': n, 'samples': trap_samples[r]} for r, n in trap_reasons.most_common()],
         'seconds': round(time.time() - t0, 1),

@@ -36,6 +36,8 @@ set(VOY_CORE_SOURCES
   src/host/machine.cpp
   src/gl/gl.cpp
   src/app/session.cpp
+  src/decomp/decomp.cpp
+  src/decomp/ps_math_3d.cpp
 )
 add_library(voy_core STATIC ${VOY_CORE_SOURCES})
 target_include_directories(voy_core PUBLIC src "${CMAKE_BINARY_DIR}/generated")

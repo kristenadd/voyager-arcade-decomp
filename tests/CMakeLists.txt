@@ -8,3 +8,8 @@ foreach(t attract play service)
   add_test(NAME game_${t} COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/game_test.py $<TARGET_FILE:vgrun> ${t})
   set_tests_properties(game_${t} PROPERTIES SKIP_RETURN_CODE 77 LABELS game TIMEOUT 1800)
 endforeach()
+
+add_executable(decomp_diff decomp_diff.cpp)
+target_link_libraries(decomp_diff PRIVATE voy_game)
+add_test(NAME decomp_diff COMMAND decomp_diff)
+set_tests_properties(decomp_diff PROPERTIES SKIP_RETURN_CODE 77 LABELS game)

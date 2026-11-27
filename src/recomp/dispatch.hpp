@@ -23,6 +23,14 @@ struct GuestEntry {
 // import k is ImportBase + 16 * k.
 constexpr std::uint32_t ImportBase = 0xFFF00000u;
 
+// A decompiled function (src/decomp) and the translation it replaced, for
+// the differential test.
+struct DecompPair {
+    std::uint32_t address;
+    const char* name;
+    GuestFn translated;
+};
+
 // One imported function. `handler` is the native implementation (a cdecl
 // callee: arguments at [esp+4]..., result in eax or st(0), esp moves past the
 // return address only). A null handler fails closed and names `name`.
