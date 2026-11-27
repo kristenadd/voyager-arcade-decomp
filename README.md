@@ -242,3 +242,10 @@ Options: `--container <dir>`, `--frames N`, `--sound` (run stvsnd too),
 | `src/app` | content check, headless runner |
 | `src/platform` | Mac app, iOS and visionOS app (`ios`, with `visionos/Info.plist.in`), shared Apple pieces (audio, controllers, game thread) |
 | `tests` | CTest suite |
+
+## License
+
+The port's own code is under the MIT License ([LICENSE](LICENSE)). It covers
+none of the game: Star Trek: Voyager arcade's program, art, sound and data are
+not in this repository and stay under their owners' rights; you need your own
+copy of the game files.
