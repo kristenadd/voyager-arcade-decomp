@@ -58,7 +58,10 @@ void h_fopen(Cpu& c) {
         host = m.map_read(path);
     }
     FILE* fp = host.empty() ? nullptr : std::fopen(host.c_str(), host_mode(mode).c_str());
-    if (!fp) return ret(c, 0);
+    if (!fp) {
+        note_once("fopen", p.name() + ": " + path + " (" + mode + ") not available" + (host.empty() ? "" : " at " + host));
+        return ret(c, 0);
+    }
     GuestFile f;
     f.fp = fp;
     f.path = path;

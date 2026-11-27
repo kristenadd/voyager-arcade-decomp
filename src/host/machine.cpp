@@ -5,7 +5,9 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cctype>
 #include <filesystem>
+#include <unordered_map>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -15,6 +17,7 @@
 #include "host/fail.hpp"
 #include "host/os.hpp"
 #include "host/process.hpp"
+#include "recomp/x86ops.hpp"
 
 namespace voy::host {
 
@@ -182,11 +185,58 @@ void Machine::run_script() {
 Machine::~Machine() { stop_sound(); }
 
 namespace {
+
+// The game asks for names whose case differs from the files in the dump
+// (Hlk_... for hlk_...). Case-insensitive volumes hide that; iOS's is case
+// sensitive, so a missing path is looked up again one component at a time,
+// ignoring case, from cached directory listings.
+std::mutex g_dir_m;
+std::unordered_map<std::string, std::unordered_map<std::string, std::string>> g_dirs;
+
+std::string lower(std::string s) {
+    for (char& ch : s) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+    return s;
+}
+
+const std::unordered_map<std::string, std::string>& listing(const std::string& dir) {
+    auto it = g_dirs.find(dir);
+    if (it != g_dirs.end()) return it->second;
+    auto& m = g_dirs[dir];
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(dir, ec)) {
+        const std::string n = e.path().filename().string();
+        m.emplace(lower(n), n);
+    }
+    return m;
+}
+
 bool exists(const std::string& p, bool* is_dir) {
     struct stat st;
     if (::stat(p.c_str(), &st) != 0) return false;
     if (is_dir) *is_dir = S_ISDIR(st.st_mode);
     return true;
+}
+
+// `rel` under `root`, matching each component's case to what is on disk.
+std::string resolve(const std::string& root, const std::string& rel, bool* is_dir) {
+    const std::string direct = root + "/" + rel;
+    if (exists(direct, is_dir)) return direct;
+    std::lock_guard<std::mutex> lock(g_dir_m);
+    std::string cur = root;
+    std::size_t pos = 0;
+    while (pos <= rel.size()) {
+        const std::size_t slash = rel.find('/', pos);
+        const std::string part = rel.substr(pos, slash == std::string::npos ? std::string::npos : slash - pos);
+        if (!part.empty() && part != ".") {
+            const auto& l = listing(cur);
+            auto it = l.find(lower(part));
+            if (it == l.end()) return {};
+            cur += "/" + it->second;
+        }
+        if (slash == std::string::npos) break;
+        pos = slash + 1;
+    }
+    return exists(cur, is_dir) ? cur : std::string();
 }
 std::string strip_dot(std::string p) {
     while (p.rfind("./", 0) == 0) p = p.substr(2);
@@ -199,8 +249,7 @@ std::string Machine::map_read(const std::string& path, bool* is_dir) const {
         const std::string rest = path.substr(10);
         const std::string c = config_.container + "/data/stv/" + rest;
         if (exists(c, is_dir)) return c;
-        const std::string h = config_.content + "/stv/" + rest;
-        return exists(h, is_dir) ? h : std::string();
+        return resolve(config_.content + "/stv", rest, is_dir);
     }
     if (path.rfind("/var/stv/", 0) == 0) {
         const std::string h = config_.container + "/" + path.substr(9);
@@ -210,8 +259,7 @@ std::string Machine::map_read(const std::string& path, bool* is_dir) const {
     const std::string rel = strip_dot(path);
     const std::string c = config_.container + "/" + rel;
     if (exists(c, is_dir)) return c;
-    const std::string h = config_.content + "/" + rel;
-    return exists(h, is_dir) ? h : std::string();
+    return resolve(config_.content, rel, is_dir);
 }
 
 std::string Machine::map_write(const std::string& path) const {
@@ -272,6 +320,14 @@ void Machine::stop_sound() {
 Machine::AudioFormat Machine::audio_format() const { return dsp_format(*dsp_); }
 
 void Machine::pull_audio(std::int16_t* out, int frames, int rate) { dsp_pull(*dsp_, out, frames, rate); }
+
+bool Machine::player_playing(int n) {
+    std::lock_guard<std::mutex> lock(current_m_);
+    if (!current_ || current_->name() != "trek") return false;
+    const std::uint32_t players = current_->sym("g_Players");
+    if (!players) return false;
+    return recomp::ld16(current_->mem(), players + std::uint32_t(n & 1) * 55460u + 0x734u) != 0;
+}
 
 void Machine::count_frame() {
     ++frames_drawn_;

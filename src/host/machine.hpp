@@ -140,6 +140,11 @@ public:
     // Fills `out` with interleaved stereo int16 frames at `rate`; silence when there are none.
     void pull_audio(std::int16_t* out, int frames, int rate);
 
+    // Whether player n (0, 1) is in a game: SPlayer.playing in trek's
+    // g_Players (55,460-byte players, the flag at +0x734, as inpUpdate reads
+    // it). False when trek is not running (the service menu).
+    bool player_playing(int n);
+
     // Frames drawn by the game since start (glutSwapBuffers).
     std::uint64_t frames_drawn() const { return frames_drawn_; }
     void count_frame();

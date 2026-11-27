@@ -13,6 +13,8 @@ endif()
 set(VOY_GENERATED_DIR "${CMAKE_SOURCE_DIR}/build/x86tr" CACHE PATH "tools/prepare.sh output")
 option(VOY_BUILD_MAC_APP "Build the Mac app" ON)
 option(VOY_BUILD_TESTS "Build the tests" ON)
+set(VOY_IOS_BUNDLE_ID "local.voyagerarcade.ios" CACHE STRING "iOS bundle identifier")
+set(VOY_IOS_TEAM "" CACHE STRING "Apple development team for iOS device builds")
 
 # The manifest as a C++ string.
 file(READ "${CMAKE_SOURCE_DIR}/manifests/voyager_e4.txt" VOY_MANIFEST)
@@ -112,7 +114,18 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/src/platform/ios/Info.plist.in"
     OUTPUT_NAME "VoyagerArcade"
     XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_SOURCE_DIR}/src/platform/ios/VoyagerArcade.entitlements"
-    XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2")
+    XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "${VOY_IOS_BUNDLE_ID}")
+  if(VOY_IOS_TEAM)
+    set_target_properties(VoyagerArcadeIOS PROPERTIES
+      XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${VOY_IOS_TEAM}"
+      XCODE_ATTRIBUTE_CODE_SIGN_STYLE Automatic)
+  endif()
+  if(CMAKE_OSX_SYSROOT MATCHES "simulator" AND NOT CMAKE_GENERATOR STREQUAL "Xcode")
+    # The Simulator runs ad hoc signed apps.
+    add_custom_command(TARGET VoyagerArcadeIOS POST_BUILD
+      COMMAND codesign --force --sign - --timestamp=none $<TARGET_BUNDLE_DIR:VoyagerArcadeIOS>)
+  endif()
 endif()
 
 if(VOY_BUILD_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
