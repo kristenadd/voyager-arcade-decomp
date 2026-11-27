@@ -44,6 +44,7 @@ void Controllers::poll(host::Machine& m, double dt) {
         const bool reload = g.buttonB.pressed || g.leftTrigger.value > 0.4f || g.rightShoulder.pressed;
         const bool start = g.buttonMenu.pressed;
         const bool coin = g.buttonOptions && g.buttonOptions.pressed;
+        if (curve(sx) != 0 || curve(sy) != 0 || fire || reload || start || coin) activity_ = true;
         if (fire && !pl.fire) {
             m.input().shot(i, int(pl.x), int(pl.y));
             pl.repeat = 0.18;

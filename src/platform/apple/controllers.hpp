@@ -19,6 +19,8 @@ public:
     // The crosshairs to draw (hidden for players without a controller).
     void cursors(gpu::Renderer::Cursor out[2]) const;
     bool any_connected() const;
+    // True once after a frame in which a stick moved or a button was down.
+    bool take_activity() { const bool a = activity_; activity_ = false; return a; }
 
 private:
     struct Player {
@@ -27,6 +29,7 @@ private:
         double repeat = 0;
         bool connected = false;
     } p_[2];
+    bool activity_ = false;
 };
 
 }

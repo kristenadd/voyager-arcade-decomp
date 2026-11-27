@@ -1,9 +1,11 @@
 // The iOS / iPadOS app. Free play is forced (there is no coin slot).
 //
-// Touch: when player 1 is not in a game, a tap starts one; in a game, a tap
-// shoots where it lands. The RELOAD button (or a two-finger tap, or a tap on
-// the black bars outside the picture) is an off-screen shot: reload and
-// remodulate. Game controllers work as on the Mac (platform/apple/controllers).
+// Touch: the START button (bottom right) starts a game. A tap on the
+// picture shoots where it lands; a tap anywhere outside it (the black bars)
+// or a two-finger tap is an off-screen shot: reload and remodulate. Game
+// controllers work as on the Mac (platform/apple/controllers). Using one
+// shows its crosshair and hides the START button; touching the screen hides
+// the crosshair and brings the button back.
 //
 // The game files go in the app's Documents folder (the Files app, or Finder
 // with the device connected): the folder holding trek, stvsnd, stvserv and
@@ -55,10 +57,11 @@ std::string find_content() {
     std::unique_ptr<platform::AudioOut> audio;
     platform::Controllers pads;
     float rect[4];
-    int start_hold;  // frames left holding Start for a tap-to-start
+    int start_hold;  // frames left holding Start after the START button
     std::chrono::steady_clock::time_point last;
     UILabel* message;
-    UIButton* reload;
+    UIButton* start;
+    bool pad_mode;  // the controller was used last: crosshair shown, START hidden
 }
 
 - (BOOL)prefersStatusBarHidden { return YES; }
@@ -117,37 +120,58 @@ std::string find_content() {
     last = std::chrono::steady_clock::now();
     host->start();
 
-    reload = [UIButton buttonWithType:UIButtonTypeSystem];
-    [reload setTitle:@"RELOAD" forState:UIControlStateNormal];
-    reload.titleLabel.font = [UIFont boldSystemFontOfSize:18];
-    [reload setTitleColor:[UIColor colorWithWhite:1 alpha:0.85] forState:UIControlStateNormal];
-    reload.backgroundColor = [UIColor colorWithRed:0.1 green:0.3 blue:0.7 alpha:0.45];
-    reload.layer.cornerRadius = 36;
-    reload.layer.borderWidth = 2;
-    reload.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.5].CGColor;
-    reload.translatesAutoresizingMaskIntoConstraints = NO;
-    [reload addTarget:self action:@selector(reloadPressed) forControlEvents:UIControlEventTouchDown];
-    [self.view addSubview:reload];
-    [NSLayoutConstraint activateConstraints:@[
-        [reload.widthAnchor constraintEqualToConstant:110], [reload.heightAnchor constraintEqualToConstant:72],
-        [reload.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12],
-        [reload.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-12],
-    ]];
+    start = [UIButton buttonWithType:UIButtonTypeSystem];
+    [start setTitle:@"START" forState:UIControlStateNormal];
+    start.titleLabel.font = [UIFont boldSystemFontOfSize:18];
+    [start setTitleColor:[UIColor colorWithWhite:1 alpha:0.85] forState:UIControlStateNormal];
+    start.backgroundColor = [UIColor colorWithRed:0.1 green:0.3 blue:0.7 alpha:0.45];
+    start.layer.cornerRadius = 36;
+    start.layer.borderWidth = 2;
+    start.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.5].CGColor;
+    [start addTarget:self action:@selector(startPressed) forControlEvents:UIControlEventTouchDown];
+    [self.view addSubview:start];
+    [self placeStart];
 }
 
-- (void)reloadPressed {
-    if (host) host->machine().input().shot(0, -1, -1);
+// The START button goes in the black bar right of the 4:3 picture when the
+// bar (inside the safe area) is wide enough, else over the picture's corner.
+- (void)placeStart {
+    if (!start) return;
+    const CGRect b = self.view.bounds;
+    const UIEdgeInsets safe = self.view.safeAreaInsets;
+    const CGFloat pic_w = MIN(b.size.width, b.size.height * 4 / 3);
+    const CGFloat pic_right = (b.size.width + pic_w) / 2;
+    const CGFloat bar = b.size.width - safe.right - pic_right;
+    const CGFloat h = 72, bottom = b.size.height - MAX(safe.bottom, 12.0) - h;
+    if (bar >= 80 + 8) {
+        const CGFloat w = MIN(110.0, bar - 8);
+        start.frame = CGRectMake(pic_right + (bar - w) / 2, bottom, w, h);
+    } else {
+        start.frame = CGRectMake(b.size.width - safe.right - 12 - 110, bottom, 110, h);
+    }
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    [self placeStart];
+}
+
+- (void)viewSafeAreaInsetsDidChange {
+    [super viewSafeAreaInsetsDidChange];
+    [self placeStart];
+}
+
+- (void)startPressed {
+    if (!host) return;
+    host->machine().input().set_button(host::Input::Start1, true);
+    start_hold = 8;
 }
 
 - (void)touchesBegan:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event {
     if (!host) return;
+    pad_mode = false;  // touch play: START back, crosshair hidden
     if (event.allTouches.count >= 2) {  // two fingers: reload
         host->machine().input().shot(0, -1, -1);
-        return;
-    }
-    if (!host->machine().player_playing(0)) {
-        host->machine().input().set_button(host::Input::Start1, true);
-        start_hold = 8;
         return;
     }
     const CGFloat s = self.view.contentScaleFactor;
@@ -169,11 +193,13 @@ std::string find_content() {
     if (dt > 0.1) dt = 0.1;
     if (start_hold > 0 && --start_hold == 0) host->machine().input().set_button(host::Input::Start1, false);
     pads.poll(host->machine(), dt);
+    if (pads.take_activity()) pad_mode = true;  // controller play: Start is on the pad
+    start.hidden = pad_mode;
     if (auto f = host->take_new()) renderer->draw(*f);
     gpu::Renderer::Cursor cur[2];
     pads.cursors(cur);
+    if (!pad_mode) cur[0].visible = cur[1].visible = false;
     renderer->set_cursors(cur, 2);
-    reload.hidden = pads.any_connected();
     id<CAMetalDrawable> d = view.currentDrawable;
     if (d) renderer->present((__bridge void*)d, int(view.drawableSize.width), int(view.drawableSize.height), rect);
 }

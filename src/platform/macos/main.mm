@@ -3,9 +3,11 @@
 // Mouse: aim and click to shoot; right click (or a click outside the picture)
 // reloads / remodulates. Keys: 5 / 6 coin, 1 / 2 start, F2 the service menu
 // (the cabinet's test switch), Ctrl-Cmd-F full screen, Cmd-Q quit. Game
-// controllers: see platform/apple/controllers.hpp.
+// controllers: see platform/apple/controllers.hpp. Their crosshair shows once
+// a controller is used and hides again on a mouse click.
 //
-// The game folder comes from --content <folder>, VOY_CONTENT, or the folder
+// The game folder comes from --content <folder>, VOY_CONTENT, a copy inside
+// the app (Contents/Resources/Game, see tools/install_mac.sh), or the folder
 // chosen the first time (kept in the app's defaults as ContentFolder).
 #import <AppKit/AppKit.h>
 #import <MetalKit/MetalKit.h>
@@ -34,6 +36,7 @@ using namespace voy;
     platform::Controllers pads;
     float rect[4];
     bool mouse_down, right_down;
+    bool pad_mode;  // the controller was used last: its crosshair is shown
     double repeat;
     NSPoint last_mouse;
     std::chrono::steady_clock::time_point last_time;
@@ -51,6 +54,7 @@ using namespace voy;
     last_time = now;
     if (dt > 0.1) dt = 0.1;
     pads.poll(host->machine(), dt);
+    if (pads.take_activity()) pad_mode = true;
     // Held mouse button: the trigger repeats.
     if (mouse_down) {
         repeat -= dt;
@@ -75,6 +79,7 @@ using namespace voy;
     }
     gpu::Renderer::Cursor cur[2];
     pads.cursors(cur);
+    if (!pad_mode) cur[0].visible = cur[1].visible = false;  // a click hides the crosshair
     renderer->set_cursors(cur, 2);
     id<CAMetalDrawable> d = view.currentDrawable;
     if (d) renderer->present((__bridge void*)d, int(view.drawableSize.width), int(view.drawableSize.height), rect);
@@ -90,6 +95,7 @@ using namespace voy;
 }
 
 - (void)mouseDown:(NSEvent*)e {
+    pad_mode = false;
     last_mouse = [self convertPoint:e.locationInWindow fromView:nil];
     [self shootAt:last_mouse gun:0];
     mouse_down = true;
@@ -97,7 +103,10 @@ using namespace voy;
 }
 - (void)mouseDragged:(NSEvent*)e { last_mouse = [self convertPoint:e.locationInWindow fromView:nil]; }
 - (void)mouseUp:(NSEvent*)e { mouse_down = false; }
-- (void)rightMouseDown:(NSEvent*)e { host->machine().input().shot(0, -1, -1); }
+- (void)rightMouseDown:(NSEvent*)e {
+    pad_mode = false;
+    host->machine().input().shot(0, -1, -1);
+}
 
 - (void)setKey:(NSEvent*)e down:(BOOL)down {
     auto& in = host->machine().input();
@@ -111,7 +120,7 @@ using namespace voy;
     switch ([ch characterAtIndex:0]) {
     case '5': if (down && !e.isARepeat) in.coin(0); break;
     case '6': if (down && !e.isARepeat) in.coin(1); break;
-    case '1': case '\r': in.set_button(host::Input::Start1, down); break;
+    case '1': case '\r': case 0x03: in.set_button(host::Input::Start1, down); break;  // 1, Return, keypad Enter
     case '2': in.set_button(host::Input::Start2, down); break;
     case ' ': if (down && !e.isARepeat) in.shot(0, -1, -1); break;  // reload / remodulate
     case 'p': case 'o': if (down && !e.isARepeat) in.key([ch characterAtIndex:0]); break;  // the game's pause keys
@@ -137,6 +146,9 @@ static std::string choose_content() {
     for (NSUInteger i = 0; i + 1 < args.count; ++i)
         if ([args[i] isEqualToString:@"--content"]) return args[i + 1].UTF8String;
     if (const char* e = getenv("VOY_CONTENT")) return e;
+    NSString* bundled = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"Game"];
+    if ([NSFileManager.defaultManager fileExistsAtPath:[bundled stringByAppendingPathComponent:@"trek"]])
+        return bundled.UTF8String;
     NSString* saved = [NSUserDefaults.standardUserDefaults stringForKey:@"ContentFolder"];
     if (saved) return saved.UTF8String;
     NSOpenPanel* p = [NSOpenPanel openPanel];
@@ -170,7 +182,9 @@ static std::string choose_content() {
     cfg.content = content;
     cfg.container = app::default_container();
     cfg.stdout_echo = getenv("VOY_STDOUT") != nullptr;
-    cfg.free_play = [NSUserDefaults.standardUserDefaults boolForKey:@"FreePlay"] || getenv("VOY_FREE_PLAY");
+    // Free play unless turned off (defaults write local.voyagerarcade.mac FreePlay -bool false).
+    NSNumber* fp = [NSUserDefaults.standardUserDefaults objectForKey:@"FreePlay"];
+    cfg.free_play = (fp ? fp.boolValue : true) || getenv("VOY_FREE_PLAY");
     if (const char* s = getenv("VOY_SCRIPT")) cfg.input_script = s;
 
     window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 1024, 768)

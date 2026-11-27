@@ -22,15 +22,10 @@ committed; the translated code is generated from your files at build time.
 
 ## Status
 
-| Phase | State |
-|---|---|
-| 0 Inventory | Done ([PHASE0.md](PHASE0.md)) |
-| 1–2 Skeleton, translator | Done: 1,745 + 208 + 642 functions translate; nothing traps outside the replaced key check |
-| 3 Graphics | Done: OpenGL 1.x on the CPU (transform, lighting, culling), Metal renderer, 4× MSAA, 4:3 letterbox |
-| 4 Services | Done: guns (mouse, touch, controllers), coins, start, test switch → service menu, sound (stvsnd → /dev/dsp → AudioQueue), settings / audits / scores in the container |
-| 5 Tests | Done: CTest unit tests, deterministic attract replay, scripted play, service menu |
-| 6 Decompilation | Started: framework, differential test, 17 functions of `ps_math_3d.c` |
-| 7 iOS | Runs in the Simulator: attract, free play, tap to start; not yet tried on a device |
+The game, its sound synthesizer and its service menu run on the Mac and on
+iPhone and iPad, with sound, light-gun input from the mouse, touch or a game
+controller, and the cabinet's settings, audits and high scores. Decompilation
+has begun with the vector math of `ps_math_3d.c`.
 
 ## Building
 
@@ -67,7 +62,19 @@ python3 tools/make_icon.py "<game folder>"
 open "build/mac/Voyager Arcade.app" --args --content "<game folder>"
 ```
 
-Without `--content` the app asks for the folder once and remembers it. It
+To install it in `/Applications` with the game inside the app, so it needs
+nothing else (the game is cloned in, taking no extra space on the same disk;
+the app then holds your game files, so keep it to yourself):
+
+```bash
+tools/install_mac.sh "<game folder>"
+```
+
+The app uses only macOS's own libraries and frameworks (no Homebrew); the
+script refuses to install a build that links anything else.
+
+Without `--content` or a game inside the app, it asks for the folder once and
+remembers it. It
 checks the folder against `manifests/voyager_e4.txt` first. Settings, audits,
 high scores and logs live in `~/Library/Application Support/VoyagerArcade`.
 
@@ -75,14 +82,16 @@ high scores and logs live in `~/Library/Application Support/VoyagerArcade`.
 |---|---|---|
 | Aim and shoot | point and click (hold to repeat) | left (or right) stick moves the crosshair; A or right trigger fires |
 | Reload / remodulate | right click, Space, or click outside the picture | B, left trigger or right shoulder |
-| Start P1 / P2 | 1 or Return / 2 | Menu |
-| Coin | 5 (P1), 6 (P2) | Options / View |
+| Start P1 / P2 | 1, Return or keypad Enter / 2 | Menu (Start) |
+| Coin | 5 (P1), 6 (P2) | Options / View (Select) |
 | Service menu (test switch) | F2 (then Start 1 changes item, Start 2 selects) | none |
 | Pause / resume (the game's debug keys) | P / O | none |
 | Full screen, quit | Ctrl-Cmd-F, Cmd-Q | none |
 
-A second controller is player 2. Free play: set it in the service menu
-(Coin Options), or `defaults write local.voyagerarcade.mac FreePlay -bool true`.
+A second controller is player 2. The controller's crosshair shows once you use
+it and hides when you click the mouse. The Mac app runs in free play; to use the
+coin settings of the service menu instead,
+`defaults write local.voyagerarcade.mac FreePlay -bool false`.
 
 ## iPhone and iPad
 
@@ -103,11 +112,12 @@ space:
 cp -cR "<game folder>" "$(xcrun simctl get_app_container booted local.voyagerarcade.ios data)/Documents/Voyager"
 ```
 
-Free play is forced on iOS. When player 1 is not in a game, a tap starts one;
-in a game, a tap shoots where it lands. The **RELOAD** button (bottom right),
-a two-finger tap or a tap on the black bars reloads and remodulates.
-Controllers work as on the Mac, and the RELOAD button hides while one is
-connected.
+Free play is forced on iOS. The **START** button (bottom right) starts a
+game. A tap on the picture shoots where it lands; a tap anywhere outside it
+(the black bars) or a two-finger tap reloads and remodulates. Controllers
+work as on the Mac (Menu also starts). Using one shows its crosshair and hides
+the START button; touching the screen hides the crosshair and brings the
+button back.
 
 For a device, generate an Xcode project signed for your team. The app needs
 the extended virtual addressing entitlement (each guest program reserves a
@@ -120,6 +130,19 @@ cmake --preset ios-device -DVOY_IOS_TEAM=<team id>
 ```bash
 xcodebuild -project build/ios-device/VoyagerArcade.xcodeproj -target VoyagerArcadeIOS -configuration RelWithDebInfo -allowProvisioningUpdates
 ```
+
+Install it and copy the game folder (4.8 GB) into the app over the cable;
+`xcrun devicectl list devices` gives the device id:
+
+```bash
+xcrun devicectl device install app --device <device id> build/ios-device/RelWithDebInfo-iphoneos/VoyagerArcade.app
+```
+
+```bash
+xcrun devicectl device copy to --device <device id> --domain-type appDataContainer --domain-identifier local.voyagerarcade.ios --source "<game folder>" --destination Documents/Voyager
+```
+
+Reinstalling keeps the game files; deleting the app removes them.
 
 ## Testing
 
@@ -138,8 +161,8 @@ skipped.
 
 | Setting | Where | Effect |
 |---|---|---|
-| `--content <dir>` / `VOY_CONTENT` | Mac app | the game folder |
-| `FreePlay` (defaults) / `VOY_FREE_PLAY=1` | Mac app | free play regardless of the coin settings |
+| `--content <dir>` / `VOY_CONTENT` | Mac app | the game folder (before `Contents/Resources/Game` in the app, then the remembered folder) |
+| `FreePlay` (defaults, on unless set to false) / `VOY_FREE_PLAY=1` | Mac app | free play regardless of the coin settings |
 | `VOY_STDOUT=1` | Mac and iOS apps | the programs' printf output on stderr |
 | `VOY_SCRIPT=<file>` | Mac app | scripted input (format in `src/host/machine.hpp`) |
 | `VOY_CAPTURE=<prefix>` | Mac app | every 300th frame as a PNG |
@@ -166,6 +189,7 @@ Options: `--container <dir>`, `--frames N`, `--sound` (run stvsnd too),
 | `tools/formats/segdump.py` | walks a `.seg` video file and writes frames as PNG |
 | `tools/prepare.sh`, `tools/make_manifests.py` | translation step, manifest |
 | `tools/make_icon.py` | app icon from the game's title screen (`build/icon`) |
+| `tools/install_mac.sh` | installs the Mac app with the game inside it |
 | `src/recomp` | guest CPU state, memory, dispatch, natives |
 | `src/host` | the Linux host: processes, libc, stdio, devices, GLUT, the supervisor (`machine.cpp`) |
 | `src/gl` | OpenGL 1.x emulation |
