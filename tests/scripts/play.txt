@@ -1,0 +1,9 @@
+# Two coins, player 1 starts, a few shots, a reload, more shots.
+100 coin 0
+110 coin 0
+130 tap-start 1
+400 shot 0 256 200
+420 shot 0 200 180
+440 shot 0 300 220
+460 reload 0
+480 shot 0 256 200

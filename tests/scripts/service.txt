@@ -1,0 +1,3 @@
+# The test switch: trek exits to the service menu (stvserv).
+100 test down
+110 test up
