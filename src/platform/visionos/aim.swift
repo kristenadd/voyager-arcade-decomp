@@ -60,8 +60,10 @@ final class SpatialAim: ObservableObject {
                 MainActor.assumeIsolated { self?.refresh() }
             }
         }
-        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil,
-                                               queue: .main) { [weak self] _ in
+        // By its string: Xcode 26's SDK on the CI doesn't give CMake's swiftc the Swift name
+        // (UIApplication.didBecomeActiveNotification).
+        let becameActive = NSNotification.Name("UIApplicationDidBecomeActiveNotification")
+        NotificationCenter.default.addObserver(forName: becameActive, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.runTracking(attempt: 0) }
         }
         refresh()
