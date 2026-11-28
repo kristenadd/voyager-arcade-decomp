@@ -18,6 +18,11 @@ Read [README.md](README.md), [PLAN.md](PLAN.md) and [PHASE0.md](PHASE0.md).
   (`host::note_once`); do not guess.
 - A decompiled function must pass `decomp_diff`; add its signature to
   `tests/decomp_diff.cpp`.
+- CI (`.github/workflows/release-builds.yml`): builds hold translated game
+  code, so never upload them as artifacts or cache `build/`; they go only to
+  Firebase and the private `kristenadd/voyager-arcade-ci-assets` releases.
+  That repo also holds the CI's inputs (the three programs, `build/icon`);
+  refresh its `icon/` after re-running `make_icon.py`.
 - Settings (env vars, app defaults, vgrun options) are documented in the
   README "Settings and debugging" table; update it in the same commit.
 - Check changes headless first: `vgrun --frames N --frame-dump` writes PNGs

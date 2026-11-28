@@ -212,6 +212,7 @@ skipped.
 | `VOY_CAPTURE=<prefix>` | Mac app | every 300th frame as a PNG |
 | `VOY_GL_TRACE=<frame>` | all | logs that frame's GL calls |
 | `VOY_DECOMP=0` | all | runs the translations instead of the decompiled functions |
+| `-DVOY_APP_VERSION=` / `-DVOY_BUILD_NUMBER=` | CMake | the apps' version and build number (default 0.1 and 1; the release workflow sets them) |
 
 `vgrun` runs the cabinet without a window, on a virtual 60 Hz clock (as fast
 as the CPU allows, and deterministic):
@@ -224,6 +225,22 @@ Options: `--container <dir>`, `--frames N`, `--sound` (run stvsnd too),
 `--stdout`, `--free-play`, `--script <file>`, `--hash-every N`,
 `--frame-dump <prefix>` (every Nth frame as PNG, with `--hash-every`).
 
+## Release builds (GitHub Actions)
+
+`.github/workflows/release-builds.yml` builds, on every push to `main`, a
+pushed tag `v*`, or by hand:
+
+- the Mac app, signed with Developer ID, notarized and stapled;
+- ad-hoc iPhone / iPad and Vision Pro `.ipa` files. The iOS one goes to
+  Firebase App Distribution. Testers who accept the invite have their devices
+  registered with Apple before the next build.
+
+Each build holds code translated from the game, so none of it is published
+here. The three programs the translator reads and the icon `make_icon.py`
+made come from a private repository. The finished apps go to a release
+there, and to Firebase. The header of the workflow lists the secrets and
+variables; `~/Projects/SigningSecrets` sets them.
+
 ## Layout
 
 | Path | What |
@@ -234,6 +251,7 @@ Options: `--container <dir>`, `--frames N`, `--sound` (run stvsnd too),
 | `tools/prepare.sh`, `tools/make_manifests.py` | translation step, manifest |
 | `tools/make_icon.py` | app icon from the game's title screen (`build/icon`) |
 | `tools/install_mac.sh` | installs the Mac app with the game inside it |
+| `.github/workflows`, `Gemfile`, `fastlane` | release builds, Firebase App Distribution |
 | `src/recomp` | guest CPU state, memory, dispatch, natives |
 | `src/host` | the Linux host: processes, libc, stdio, devices, GLUT, the supervisor (`machine.cpp`) |
 | `src/gl` | OpenGL 1.x emulation |

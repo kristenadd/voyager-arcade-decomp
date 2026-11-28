@@ -33,6 +33,9 @@ set(VOY_GENERATED_DIR "${CMAKE_SOURCE_DIR}/build/x86tr" CACHE PATH "tools/prepar
 option(VOY_BUILD_MAC_APP "Build the Mac app" ON)
 option(VOY_BUILD_TESTS "Build the tests" ON)
 set(VOY_IOS_BUNDLE_ID "local.voyagerarcade.ios" CACHE STRING "iOS bundle identifier")
+# CFBundleShortVersionString and CFBundleVersion (the release workflow sets them).
+set(VOY_APP_VERSION "0.1" CACHE STRING "App version (X.Y.Z)")
+set(VOY_BUILD_NUMBER "1" CACHE STRING "App build number")
 
 # The app icon, made from the player's own title screen by tools/make_icon.py
 # (never committed). Without it the apps get the system's blank icon.
@@ -109,6 +112,10 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${VOY_GENERATED_DIR}/trek/gen/sources.txt" "${VOY_GENERATED_DIR}/stvsnd/gen/sources.txt"
   "${VOY_GENERATED_DIR}/stvserv/gen/sources.txt" "${CMAKE_SOURCE_DIR}/manifests/voyager_e4.txt")
 
+# An archive of a CMake-made Xcode project is "generic" (exportArchive can't use
+# it) unless only the app installs: SKIP_INSTALL for everything, NO on the app.
+set(CMAKE_XCODE_ATTRIBUTE_SKIP_INSTALL YES)
+
 add_library(voy_game INTERFACE)
 target_link_libraries(voy_game INTERFACE voy_core ${VOY_GENERATED_LIBS} voy_core)
 
@@ -178,7 +185,10 @@ if(VOY_MOBILE)
     XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_SOURCE_DIR}/src/platform/ios/VoyagerArcade.entitlements"
     XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "${voy_family}"
     MACOSX_BUNDLE_GUI_IDENTIFIER "${VOY_IOS_BUNDLE_ID}"
-    XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${VOY_IOS_BUNDLE_ID}")
+    XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${VOY_IOS_BUNDLE_ID}"
+    XCODE_ATTRIBUTE_SKIP_INSTALL NO
+    XCODE_ATTRIBUTE_INSTALL_PATH "$(LOCAL_APPS_DIR)"
+    XCODE_GENERATE_SCHEME ON)
   if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
     # The Swift is a library of its own, away from the C++ flags swiftc cannot
     # take; clang links the app, and the Swift objects name the runtime

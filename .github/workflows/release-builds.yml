@@ -1,0 +1,481 @@
+# Signed builds: the Mac app (Developer ID, notarized, stapled) and ad-hoc iOS and visionOS .ipa
+# files. The iOS .ipa goes to Firebase App Distribution; all three go to a release on the private
+# repository RELEASES_REPO (default kristenadd/voyager-arcade-ci-assets).
+#
+# Runs on every push to main (not for changes to Markdown files only), on a pushed tag v*, or by
+# hand (Actions ▸ Release builds ▸ Run workflow). Only in kristenadd/voyager-arcade-decomp: forks
+# have none of the inputs below.
+#
+# This repository is public, and every build holds code translated from the game, so nothing the
+# build makes leaves the jobs except to Firebase and the private release: no artifacts, no
+# caches of build/, and the game-derived files are deleted at the end of each job.
+#
+# Inputs that are not in this repository, from the private repository ASSETS_REPO (default
+# kristenadd/voyager-arcade-ci-assets), cloned with a read-only deploy key:
+#   programs/trek, programs/stvsnd, programs/stvserv   translated by tools/prepare.sh
+#   icon/                                              build/icon, made by tools/make_icon.py
+#
+# Versions: a push to main releases the next version after the newest vX.Y.Z tag, patch + 1;
+# a line "#minor" or "#major" on its own in the pushed head commit's message bumps that part.
+# The release is vX.Y.Z on the private repository, and the tag vX.Y.Z is set on the pushed commit
+# here. A pushed tag vX.Y.Z releases that version. A run by hand builds the next version and
+# publishes it as a prerelease vX.Y.Z-build.N. "[skip ci]" in a commit message skips the run.
+# The apps get the version as CFBundleShortVersionString and the run number as CFBundleVersion
+# (VOY_APP_VERSION / VOY_BUILD_NUMBER).
+#
+# Secrets (Settings ▸ Secrets and variables ▸ Actions). ~/Projects/SigningSecrets sets them all
+# (repos.conf line kristenadd/voyager-arcade-decomp):
+#   DEVELOPER_ID_P12_BASE64           "Developer ID Application" certificate + key, .p12, base64
+#   DEVELOPER_ID_P12_PASSWORD
+#   APPLE_DEVELOPMENT_P12_BASE64      "Apple Development" certificate + key (the archives)
+#   APPLE_DEVELOPMENT_P12_PASSWORD
+#   APPLE_DISTRIBUTION_P12_BASE64     "Apple Distribution" certificate + key (the ad-hoc exports)
+#   APPLE_DISTRIBUTION_P12_PASSWORD
+#   NOTARY_API_KEY_P8                 App Store Connect API key: the .p8 text, its key ID and
+#   NOTARY_API_KEY_ID                 issuer ID. Notarizes the Mac app; makes the provisioning
+#   NOTARY_API_ISSUER_ID              profiles and registers devices (needs access to
+#                                     Certificates, Identifiers & Profiles: Admin).
+#   ASSETS_DEPLOY_KEY                 SSH private key, read-only deploy key of ASSETS_REPO
+#   FIREBASE_SERVICE_ACCOUNT_JSON     service account key with "Firebase App Distribution Admin"
+#   RELEASE_TOKEN                     fine-grained token, Contents: read and write on
+#                                     RELEASES_REPO only (without it nothing is released)
+# Variables:
+#   IOS_BUNDLE_ID                     the iOS and visionOS apps' bundle id (registered for the team)
+#   FIREBASE_PROJECT_NUMBER           Firebase console ▸ Project settings ▸ General
+#   FIREBASE_IOS_APP_ID               the iOS app's App ID there (1:…:ios:…)
+#   FIREBASE_GROUPS                   optional: tester group aliases (comma-separated) invited to
+#                                     each build; the run-by-hand input overrides it
+#   ASSETS_REPO, RELEASES_REPO        optional, default kristenadd/voyager-arcade-ci-assets
+#   XCODE_VERSION                     optional, e.g. 26.2 (default: the newest Xcode on the runner)
+#
+# Firebase App Distribution: testers open the invite on their iPhone / iPad, which collects the
+# device's UDID. Before archiving, the iOS job registers those UDIDs with Apple (fastlane
+# `sync_devices`), so the ad-hoc profile, which holds every device registered for the team,
+# covers them. A Vision Pro is registered by hand (developer.apple.com ▸ Devices). Apple allows
+# 100 devices of each kind per membership year.
+
+name: Release builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      mac:
+        description: Build the Mac app
+        type: boolean
+        default: true
+      sync_devices:
+        description: Register the Firebase testers' devices with Apple first
+        type: boolean
+        default: true
+      firebase:
+        description: Upload the iOS .ipa to Firebase App Distribution
+        type: boolean
+        default: true
+      firebase_groups:
+        description: Firebase tester groups to invite (comma-separated; empty = the FIREBASE_GROUPS variable)
+        type: string
+        default: ''
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths-ignore: ['**.md']
+
+concurrency:
+  group: release-builds-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  APPLE_TEAM_ID: B4H429V95D
+  NOTARY_PROFILE: Voyager-Notary
+  ASSETS_REPO: ${{ vars.ASSETS_REPO || 'kristenadd/voyager-arcade-ci-assets' }}
+  RELEASES_REPO: ${{ vars.RELEASES_REPO || 'kristenadd/voyager-arcade-ci-assets' }}
+
+jobs:
+  version:
+    name: Version
+    if: github.repository == 'kristenadd/voyager-arcade-decomp'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: v
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version=${GITHUB_REF_NAME#v}; tag=$GITHUB_REF_NAME; prerelease=0
+          else
+            last=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)
+            IFS=. read -r major minor patch <<< "${last:-v0.0.0}"; major=${major#v}
+            # "#major" / "#minor" count only as a line of their own (not mentioned in a sentence).
+            if printf '%s\n' "$MESSAGE" | grep -qx '[[:space:]]*#major[[:space:]]*'; then
+              major=$((major + 1)); minor=0; patch=0
+            elif printf '%s\n' "$MESSAGE" | grep -qx '[[:space:]]*#minor[[:space:]]*'; then
+              minor=$((minor + 1)); patch=0
+            else
+              patch=$((patch + 1))
+            fi
+            version=$major.$minor.$patch
+            if [ "$GITHUB_EVENT_NAME" = push ]; then tag=v$version; prerelease=0
+            else tag=v$version-build.$GITHUB_RUN_NUMBER; prerelease=1; fi
+          fi
+          echo "Version $version, build $GITHUB_RUN_NUMBER, release $tag (last tag: ${last:-none})"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release=$prerelease" >> "$GITHUB_OUTPUT"
+
+      # A draft release on the private repository; each job adds its file, and the last job
+      # publishes it once everything built.
+      - name: Start the release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ steps.v.outputs.tag }}
+          PRERELEASE: ${{ steps.v.outputs.release }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::RELEASE_TOKEN isn't set: the builds won't be released to $RELEASES_REPO"; exit 0
+          fi
+          gh release delete "$TAG" -R "$RELEASES_REPO" --yes 2>/dev/null || true
+          flags=(--draft --title "$TAG" --notes "Built from $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA (run $GITHUB_RUN_NUMBER).")
+          [ "$PRERELEASE" = 1 ] && flags+=(--prerelease)
+          gh release create "$TAG" -R "$RELEASES_REPO" "${flags[@]}"
+
+  mac:
+    name: Mac app (notarized)
+    needs: version
+    if: github.event_name != 'workflow_dispatch' || inputs.mac
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          if [ -n "${{ vars.XCODE_VERSION }}" ]; then xcode="/Applications/Xcode_${{ vars.XCODE_VERSION }}.app"
+          else xcode=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1); fi
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+          command -v ninja >/dev/null || brew install ninja
+
+      - name: Check secrets
+        env:
+          DEPLOY: ${{ secrets.ASSETS_DEPLOY_KEY }}
+          P12: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          KEY: ${{ secrets.NOTARY_API_KEY_P8 }}
+        run: |
+          for v in DEPLOY:ASSETS_DEPLOY_KEY P12:DEVELOPER_ID_P12_BASE64 KEY:NOTARY_API_KEY_P8; do
+            eval "[ -n \"\$${v%%:*}\" ]" || { echo "::error::${v#*:} isn't set (see the comment at the top of this workflow)"; exit 1; }
+          done
+
+      - name: Fetch the game's programs and the icon
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ASSETS_REPO }}
+          ssh-key: ${{ secrets.ASSETS_DEPLOY_KEY }}
+          path: build/ci-assets
+          persist-credentials: false
+
+      - name: Translate
+        run: |
+          rm -rf build/icon && cp -R build/ci-assets/icon build/icon
+          tools/prepare.sh build/ci-assets/programs
+
+      - name: Build
+        run: |
+          cmake --preset mac-host -DVOY_BUILD_TESTS=OFF \
+            -DVOY_APP_VERSION="${{ needs.version.outputs.version }}" -DVOY_BUILD_NUMBER="${{ github.run_number }}"
+          cmake --build --preset mac-host --target VoyagerArcade
+          # Only system libraries and frameworks (tools/install_mac.sh checks the same).
+          if otool -L "build/mac/Voyager Arcade.app/Contents/MacOS/Voyager Arcade" | tail -n +2 |
+             grep -v -E '^\s+/(usr/lib|System/Library)/'; then
+            echo "::error::The app links libraries outside the system (above)"; exit 1
+          fi
+
+      - name: Install the signing certificate
+        env:
+          P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          keychain_password=$(openssl rand -base64 24)
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+
+          printf '%s' "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$P12_PASSWORD" -f pkcs12 \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -P "$RUNNER_TEMP/cert.p12"
+          # Apple's Developer ID intermediate, so codesign can build the full chain (a .p12 that
+          # already includes it makes this import report a duplicate).
+          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          if ! output=$(security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$keychain" 2>&1); then
+            [[ "$output" == *"already exists"* ]] || { echo "$output"; exit 1; }
+          fi
+
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$keychain"
+          echo "KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      - name: Save the notarization credentials
+        env:
+          API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+          API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+        run: |
+          printf '%s\n' "$API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+          xcrun notarytool store-credentials "$NOTARY_PROFILE" --keychain "$KEYCHAIN" \
+            --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$API_KEY_ID" --issuer "$API_ISSUER_ID"
+          rm -P "$RUNNER_TEMP/AuthKey.p8"
+
+      - name: Sign
+        run: |
+          app="build/mac/Voyager Arcade.app"
+          identity=$(security find-identity -v -p codesigning "$KEYCHAIN" |
+            sed -n 's/^ *[0-9]*) \([0-9A-F]\{40\}\) "Developer ID Application:.*/\1/p' | head -1)
+          [ -n "$identity" ] || { echo "::error::No Developer ID Application identity in the keychain"; exit 1; }
+          codesign --force --options runtime --timestamp --sign "$identity" --keychain "$KEYCHAIN" "$app"
+          codesign --verify --strict --verbose=2 "$app"
+
+      - name: Notarize and staple
+        run: |
+          app="build/mac/Voyager Arcade.app"
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --wait \
+            --keychain-profile "$NOTARY_PROFILE" --keychain "$KEYCHAIN" \
+            --output-format json | tee "$RUNNER_TEMP/notary.json"
+          grep -q '"status" *: *"Accepted"' "$RUNNER_TEMP/notary.json" || {
+            id=$(sed -n 's/.*"id" *: *"\([^"]*\)".*/\1/p' "$RUNNER_TEMP/notary.json" | head -1)
+            xcrun notarytool log "$id" --keychain-profile "$NOTARY_PROFILE" --keychain "$KEYCHAIN" || true
+            exit 1; }
+          xcrun stapler staple "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          mkdir -p "$RUNNER_TEMP/dist"
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/dist/Voyager-Arcade-mac.zip"
+
+      - name: Add the Mac app to the private release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::warning::RELEASE_TOKEN isn't set: the Mac app isn't released"; exit 0; }
+          gh release upload "${{ needs.version.outputs.tag }}" "$RUNNER_TEMP/dist/Voyager-Arcade-mac.zip" \
+            -R "$RELEASES_REPO" --clobber
+
+      - name: Remove the keychain and the game-derived files
+        if: always()
+        run: |
+          [ -n "${KEYCHAIN:-}" ] && security delete-keychain "$KEYCHAIN" || true
+          rm -f "$RUNNER_TEMP/notarize.zip"
+          rm -rf "$RUNNER_TEMP/dist" build/ci-assets build/x86tr build/icon build/mac
+
+  ios:
+    name: ${{ matrix.title }}
+    needs: version
+    runs-on: macos-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - title: iOS ad-hoc .ipa
+            platform: ios
+            preset: ios-device
+            destination: generic/platform=iOS
+          - title: visionOS ad-hoc .ipa
+            platform: visionos
+            preset: visionos-device
+            destination: generic/platform=visionOS
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          if [ -n "${{ vars.XCODE_VERSION }}" ]; then xcode="/Applications/Xcode_${{ vars.XCODE_VERSION }}.app"
+          else xcode=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1); fi
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+
+      - name: Check secrets
+        env:
+          DEPLOY: ${{ secrets.ASSETS_DEPLOY_KEY }}
+          KEY: ${{ secrets.NOTARY_API_KEY_P8 }}
+          DEV: ${{ secrets.APPLE_DEVELOPMENT_P12_BASE64 }}
+          DIST: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
+          BUNDLE: ${{ vars.IOS_BUNDLE_ID }}
+        run: |
+          for v in DEPLOY:ASSETS_DEPLOY_KEY KEY:NOTARY_API_KEY_P8 DEV:APPLE_DEVELOPMENT_P12_BASE64 \
+                   DIST:APPLE_DISTRIBUTION_P12_BASE64 BUNDLE:IOS_BUNDLE_ID; do
+            eval "[ -n \"\$${v%%:*}\" ]" || { echo "::error::${v#*:} isn't set (see the comment at the top of this workflow)"; exit 1; }
+          done
+
+      - name: Fetch the game's programs and the icon
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ASSETS_REPO }}
+          ssh-key: ${{ secrets.ASSETS_DEPLOY_KEY }}
+          path: build/ci-assets
+          persist-credentials: false
+
+      - name: Translate
+        run: |
+          rm -rf build/icon && cp -R build/ci-assets/icon build/icon
+          tools/prepare.sh build/ci-assets/programs
+
+      - name: Install the signing certificates and the API key
+        env:
+          DEV_P12: ${{ secrets.APPLE_DEVELOPMENT_P12_BASE64 }}
+          DEV_PASSWORD: ${{ secrets.APPLE_DEVELOPMENT_P12_PASSWORD }}
+          DIST_P12: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
+          DIST_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_P12_PASSWORD }}
+          API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+        run: |
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          keychain_password=$(openssl rand -base64 24)
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          for pair in "DEV_P12:DEV_PASSWORD" "DIST_P12:DIST_PASSWORD"; do
+            eval "data=\$${pair%%:*}; password=\$${pair#*:}"
+            printf '%s' "$data" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$password" -f pkcs12 \
+              -T /usr/bin/codesign -T /usr/bin/security
+            rm -P "$RUNNER_TEMP/cert.p12"
+          done
+          # Apple's WWDR intermediate (G3) for the development / distribution chain.
+          curl -fsSL https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer -o "$RUNNER_TEMP/AppleWWDRCAG3.cer"
+          if ! output=$(security import "$RUNNER_TEMP/AppleWWDRCAG3.cer" -k "$keychain" 2>&1); then
+            [[ "$output" == *"already exists"* ]] || { echo "$output"; exit 1; }
+          fi
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$keychain"
+          echo "KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          printf '%s\n' "$API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/AuthKey.p8"
+
+      - name: Set up fastlane
+        if: matrix.platform == 'ios' && vars.FIREBASE_PROJECT_NUMBER != ''
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+
+      # Firebase collects iPhone / iPad UDIDs only; both builds' profiles hold every registered device.
+      - name: Register the Firebase testers' devices
+        if: matrix.platform == 'ios' && vars.FIREBASE_PROJECT_NUMBER != '' && (github.event_name != 'workflow_dispatch' || inputs.sync_devices)
+        env:
+          FIREBASE_PROJECT_NUMBER: ${{ vars.FIREBASE_PROJECT_NUMBER }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+        run: bundle exec fastlane ios sync_devices
+
+      - name: Configure
+        run: |
+          cmake --preset ${{ matrix.preset }} -DVOY_IOS_TEAM="$APPLE_TEAM_ID" \
+            -DVOY_IOS_BUNDLE_ID="${{ vars.IOS_BUNDLE_ID }}" \
+            -DVOY_APP_VERSION="${{ needs.version.outputs.version }}" -DVOY_BUILD_NUMBER="${{ github.run_number }}"
+
+      - name: Archive
+        run: |
+          xcodebuild -project build/${{ matrix.preset }}/VoyagerArcade.xcodeproj -scheme VoyagerArcadeIOS \
+            -configuration RelWithDebInfo -destination ${{ matrix.destination }} \
+            -archivePath "$RUNNER_TEMP/VoyagerArcade.xcarchive" -derivedDataPath "$RUNNER_TEMP/dd" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
+            -authenticationKeyID "${{ secrets.NOTARY_API_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.NOTARY_API_ISSUER_ID }}" \
+            -quiet archive
+          /usr/libexec/PlistBuddy -c 'Print :ApplicationProperties' "$RUNNER_TEMP/VoyagerArcade.xcarchive/Info.plist"
+
+      - name: Export the ad-hoc .ipa
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>release-testing</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>thinning</key><string>&lt;none&gt;</string>
+          </dict></plist>
+          EOF
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/VoyagerArcade.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
+            -authenticationKeyID "${{ secrets.NOTARY_API_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.NOTARY_API_ISSUER_ID }}"
+          mkdir -p "$RUNNER_TEMP/dist"
+          ipa="$RUNNER_TEMP/dist/Voyager-Arcade-${{ matrix.platform }}-adhoc.ipa"
+          cp "$RUNNER_TEMP"/export/*.ipa "$ipa"
+          echo "IPA=$ipa" >> "$GITHUB_ENV"
+          # Which devices the profile covers (the ones that can install this build).
+          unzip -o -q "$ipa" 'Payload/*/embedded.mobileprovision' -d "$RUNNER_TEMP/ipa"
+          security cms -D -i "$RUNNER_TEMP"/ipa/Payload/*/embedded.mobileprovision > "$RUNNER_TEMP/profile.plist"
+          echo "Provisioned devices:"; /usr/libexec/PlistBuddy -c 'Print :ProvisionedDevices' "$RUNNER_TEMP/profile.plist" || true
+
+      - name: Upload to Firebase App Distribution
+        if: matrix.platform == 'ios' && vars.FIREBASE_IOS_APP_ID != '' && (github.event_name != 'workflow_dispatch' || inputs.firebase)
+        env:
+          FIREBASE_IOS_APP_ID: ${{ vars.FIREBASE_IOS_APP_ID }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          TESTER_GROUPS: ${{ inputs.firebase_groups || vars.FIREBASE_GROUPS }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          bundle exec fastlane ios distribute ipa:"$IPA" groups:"$TESTER_GROUPS" \
+            notes:"$VERSION ($(git log -1 --format='%h %s'))"
+
+      - name: Add the .ipa to the private release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::warning::RELEASE_TOKEN isn't set: the .ipa isn't released"; exit 0; }
+          gh release upload "${{ needs.version.outputs.tag }}" "$IPA" -R "$RELEASES_REPO" --clobber
+
+      - name: Remove the keychain, the key and the game-derived files
+        if: always()
+        run: |
+          [ -n "${KEYCHAIN:-}" ] && security delete-keychain "$KEYCHAIN" || true
+          rm -fP "$RUNNER_TEMP/AuthKey.p8"
+          rm -rf "$RUNNER_TEMP/dist" "$RUNNER_TEMP/export" "$RUNNER_TEMP/ipa" "$RUNNER_TEMP/VoyagerArcade.xcarchive" \
+                 "$RUNNER_TEMP/dd" build/ci-assets build/x86tr build/icon build/${{ matrix.preset }}
+
+  release:
+    name: Publish the release
+    needs: [version, mac, ios]
+    # The Mac job may be skipped (a run by hand without it); everything that ran must have passed.
+    if: >-
+      always() && needs.version.result == 'success' && needs.ios.result == 'success' &&
+      (needs.mac.result == 'success' || needs.mac.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "RELEASE_TOKEN isn't set: nothing to publish"; exit 0; }
+          gh release edit "$TAG" -R "$RELEASES_REPO" --draft=false
+          gh release view "$TAG" -R "$RELEASES_REPO" --json url,assets -q '.url, (.assets[].name)'
+
+      # The version tag here, on the pushed commit (a tag push already has it). Tags made with
+      # this token don't start another run.
+      - name: Tag the commit
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" >/dev/null
+          echo "Tagged $GITHUB_SHA as $TAG"

@@ -9,8 +9,8 @@
     <key>CFBundleName</key><string>Voyager Arcade</string>
     <key>CFBundleDisplayName</key><string>Voyager Arcade</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>${VOY_APP_VERSION}</string>
+    <key>CFBundleVersion</key><string>${VOY_BUILD_NUMBER}</string>
     <key>MinimumOSVersion</key><string>26.0</string>
     <key>UIDeviceFamily</key><array><integer>7</integer></array>
 ${VOY_VISION_ICON_PLIST}    <key>UIFileSharingEnabled</key><true/>
